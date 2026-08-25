@@ -1,3 +1,3 @@
-# Phase 1 uses only the Python standard library.
-# No third-party packages are required.
-
+# Runtime code uses only the Python standard library.
+# Pytest is required to run the Phase 1 test suite.
+pytest>=8.0,<10.0

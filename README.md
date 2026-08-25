@@ -46,7 +46,7 @@ marine-edge-fog/
 
 - Windows 10/11
 - Python 3.10 or newer (Python 3.11 or 3.12 recommended)
-- No third-party Python dependencies in Phase 1
+- `pytest` for the Phase 1 automated test suite
 
 ## Installation (Windows PowerShell)
 
@@ -77,7 +77,7 @@ event approximately every three seconds and stops with `Ctrl+C`.
 ## Run automated tests
 
 ```powershell
-python -m unittest discover -s tests -v
+python -m pytest
 ```
 
 ## Simulation scenarios
@@ -131,4 +131,3 @@ Phase 2 can add MQTT communication between the simulated/physical Edge node and
 a Fog service, duplicate-event protection, offline synchronisation, and a
 simulated sampling-command acknowledgement. ESP32, Raspberry Pi, database,
 dashboard, machine learning, and physical pump control remain outside Phase 1.
-
