@@ -1,133 +1,266 @@
-# Marine Edge-Fog Monitoring - Phase 1
+# AI-Enabled Edge-Fog Marine HAB Early-Warning System
 
-Software-only simulation prototype for the B.Tech project **AI-Enabled
-Edge-Fog Early-Warning and Automated Sampling System for Marine Harmful Algal
-Bloom Risk Monitoring**.
+Software prototype for a B.Tech project that simulates marine measurements,
+checks sensor quality, estimates preliminary environmental HAB risk at an Edge
+node, and delivers traceable events to a Fog node through MQTT.
 
-> This prototype predicts environmental HAB risk only. It does not directly
-> detect toxins, identify an algal strain, or certify seafood safety.
+> **Safety limitation:** This prototype predicts environmental HAB risk only.
+> It does not directly detect toxins, identify toxin-producing algal strains, or
+> certify seafood safety. High-risk results require laboratory confirmation.
 
-## Phase 1 objective
+## Project progress
 
-Phase 1 demonstrates the following local pipeline without hardware, networking,
-machine learning, or a database:
+| Phase | Status |
+|---|---|
+| Phase 1 — Sensor Simulation & Edge Risk | ✅ Completed |
+| Phase 2 — MQTT Edge-Fog Communication | ✅ Completed |
+| Phase 3 — Database & Dashboard | ⏳ Pending |
+| Phase 4 — Decision / Sampling Logic | ⏳ Pending |
+| Phase 5 — ESP32 Hardware Integration | ⏳ Pending |
+| Phase 6 — Pump & Alert Integration | ⏳ Pending |
+| Phase 7 — AI Model | ⏳ Pending |
+| Phase 8 — Final Integration & Testing | ⏳ Pending |
+
+Phase 1 remains independently runnable. Phase 2 is software-only on one Windows
+laptop; no ESP32, Raspberry Pi, physical sensor, pump, database, dashboard, or
+machine-learning component is included.
+
+## Architecture
 
 ```text
-Marine Sensor Simulator -> Sensor Validation -> Edge Risk Engine -> Terminal Output
+Phase 1 simulator -> validation -> Edge risk engine
+                                      |
+                                      v
+                              Edge MQTT publisher
+                                      |
+                           Mosquitto broker (QoS 1)
+                                      |
+                                      v
+                               Fog MQTT receiver
+                                      |
+                         validation + duplicate check
+                                      |
+                                application ACK
 ```
 
-It creates simulated temperature, pH, salinity, turbidity, and dissolved-oxygen
-readings; validates their quality; and calculates a transparent preliminary
-Edge risk using configurable prototype rules.
+Edge saves every event to `data/offline_queue.jsonl` before publishing and
+removes it only after Fog returns a `RECEIVED` or `DUPLICATE` acknowledgement.
+This is the Phase 2 store-and-forward mechanism when the broker is unavailable.
 
-## Folder structure
+## Project structure
 
 ```text
 marine-edge-fog/
 |-- app.py
 |-- config.py
+|-- pytest.ini
 |-- requirements.txt
 |-- README.md
 |-- simulator/
-|   |-- __init__.py
 |   `-- sensor_simulator.py
 |-- validation/
-|   |-- __init__.py
 |   `-- sensor_validator.py
 |-- risk/
-|   |-- __init__.py
 |   `-- edge_risk_engine.py
+|-- mqtt/
+|   |-- __init__.py
+|   |-- message_utils.py
+|   |-- edge_publisher.py
+|   `-- fog_receiver.py
+|-- data/
+|   `-- .gitkeep
 `-- tests/
-    |-- __init__.py
-    `-- test_scenarios.py
+    |-- test_scenarios.py
+    `-- test_phase2_mqtt.py
 ```
 
-## Requirements
+The runtime queue is generated automatically and ignored by Git.
+
+## Requirements and initial setup
 
 - Windows 10/11
-- Python 3.10 or newer (Python 3.11 or 3.12 recommended)
-- `pytest` for the Phase 1 automated test suite
+- Python 3.10 or newer
+- Mosquitto MQTT broker
 
-## Installation (Windows PowerShell)
-
-Open PowerShell in the `marine-edge-fog` folder and run:
+Run in PowerShell:
 
 ```powershell
+cd "C:\Users\Manya Kothari\Desktop\fog and edge computin\marine-edge-fog"
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-If PowerShell blocks activation, this project can still be run with:
+If script activation is blocked for the current PowerShell session:
 
 ```powershell
-.\.venv\Scripts\python.exe app.py
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\.venv\Scripts\Activate.ps1
 ```
 
-## Run the application
+This policy is temporary. You can instead call
+`.\.venv\Scripts\python.exe` in place of `python`.
+
+## Install Mosquitto on Windows
+
+Mosquitto is system software and is not installed by `requirements.txt`.
+
+1. Open [the official Mosquitto download page](https://mosquitto.org/download/).
+2. Download and run the Windows 64-bit installer using its defaults.
+3. Open a new PowerShell and verify it:
 
 ```powershell
+& "C:\Program Files\mosquitto\mosquitto.exe" -h
+```
+
+# Phase 2 Quick Start
+
+Open three separate PowerShell terminals.
+
+### 1. Terminal 1 — Broker
+
+```powershell
+& "C:\Program Files\mosquitto\mosquitto.exe" -v
+```
+
+Expected output includes `Opening ipv4 listen socket on port 1883`.
+
+### 2. Terminal 2 — Fog receiver
+
+```powershell
+cd "C:\Users\Manya Kothari\Desktop\fog and edge computin\marine-edge-fog"
+.\.venv\Scripts\Activate.ps1
+python -m mqtt.fog_receiver
+```
+
+Expected output:
+
+```text
+Connecting to MQTT broker at localhost:1883...
+Connected to MQTT broker. Subscribed to marine/+/sensors
+```
+
+### 3. Terminal 3 — Edge publisher
+
+```powershell
+cd "C:\Users\Manya Kothari\Desktop\fog and edge computin\marine-edge-fog"
+.\.venv\Scripts\Activate.ps1
+python -m mqtt.edge_publisher
+```
+
+Expected output includes `Connected to MQTT broker (ONLINE)`. Terminal 2 shows
+sequential events and `MQTT Status : RECEIVED`.
+
+### 4. Observe messages
+
+Leave all terminals running. Sequence numbers increase 1, 2, 3, and so on,
+and Fog acknowledges each event.
+
+### 5. Test offline mode
+
+Press `Ctrl+C` in Terminal 1. Edge continues generating data and reports that
+events were safely queued in `data/offline_queue.jsonl`.
+
+### 6. Restart Broker
+
+```powershell
+& "C:\Program Files\mosquitto\mosquitto.exe" -v
+```
+
+### 7. Verify synchronization
+
+Edge reports `RECONNECTED`, replays queued messages in sequence order, receives
+Fog acknowledgements, and removes acknowledged records. An empty queue file is
+normal. Stop all three programs with `Ctrl+C`; deactivate Python with:
+
+```powershell
+deactivate
+```
+
+## Phase 1 application
+
+The original interactive menu is unchanged:
+
+```powershell
+cd "C:\Users\Manya Kothari\Desktop\fog and edge computin\marine-edge-fog"
+.\.venv\Scripts\Activate.ps1
 python app.py
 ```
 
-Choose a numbered scenario from the terminal menu. Automatic mode produces one
-event approximately every three seconds and stops with `Ctrl+C`.
+It supports normal, medium, high/critical, invalid pH, low dissolved oxygen,
+high turbidity, missing sensor, stuck sensor, sudden change, and automatic
+simulation scenarios. Invalid sensor input blocks risk prediction.
 
-## Run automated tests
+## MQTT protocol
+
+The reusable topic builder supports `zone-a`, `zone-b`, `zone-c`, and future
+single-level zone names.
+
+| Topic | Purpose |
+|---|---|
+| `marine/zone-b/sensors` | Complete event consumed by Fog |
+| `marine/zone-b/edge-risk` | Edge risk event for future consumers |
+| `marine/zone-b/status` | Retained ONLINE/OFFLINE/RECONNECTED state and LWT |
+| `marine/zone-b/commands` | Reserved Phase 2 route for Fog commands |
+| `marine/zone-b/ack` | Fog application acknowledgement |
+
+Sensor events use MQTT QoS 1. JSON includes schema version, device, zone,
+timestamp, sequence, five readings, sensor validity and score, plus Edge risk
+score and level. Fog rejects empty/invalid JSON, missing fields, unsupported
+schemas, and invalid sequences without stopping. Duplicate identity is
+`device_id + sequence_number`.
+
+Configuration is centralized in `config.py`. Optional local overrides:
 
 ```powershell
+$env:MARINE_MQTT_HOST = "localhost"
+$env:MARINE_MQTT_PORT = "1883"
+$env:MARINE_EDGE_INTERVAL = "3"
+```
+
+Never put usernames, passwords, or tokens in source control.
+
+## Automated tests
+
+Tests do not require a running broker:
+
+```powershell
+cd "C:\Users\Manya Kothari\Desktop\fog and edge computin\marine-edge-fog"
+.\.venv\Scripts\Activate.ps1
 python -m pytest
 ```
 
-## Simulation scenarios
+They cover all Phase 1 scenarios plus topics, JSON, malformed/missing data,
+schemas/sequences, duplicates, queue ordering/cleanup, and acknowledgements.
 
-| Scenario | Purpose | Expected behaviour |
-|---|---|---|
-| Normal | Baseline marine values | Valid, LOW, continue monitoring |
-| Medium Risk | Moderate temperature/turbidity/DO stress | Valid, MEDIUM, increase monitoring |
-| High Risk | Combined high temperature/turbidity and low DO | Valid, HIGH/CRITICAL, sampling verification |
-| Invalid pH | Impossible pH 15.2 | Invalid, prediction blocked |
-| Low DO | Very low dissolved oxygen | Elevated risk with DO reason |
-| High Turbidity | Abnormally high turbidity | Elevated risk with turbidity reason |
-| Missing Sensor | DO value is `None` | Missing value detected, prediction blocked |
-| Stuck Sensor | Identical temperature repeated four times | Stuck warning, prediction blocked |
-| Sudden Change | Temperature jumps from 27.1 to 45.0 | Range/jump detected, prediction blocked |
-| Automatic | Weighted mixture of valid scenarios | Repeated validation and risk output |
+## Optional malformed-message test
 
-## Example output
+With Broker and Fog running:
 
-```text
-Sensor Validity    : VALID
-Validity Score     : 1.00
-
-Edge Risk Score    : 72 / 100
-Edge Risk Level    : HIGH
-
-Recommended Action:
-ALERT
-SAMPLING VERIFICATION REQUIRED
+```powershell
+& "C:\Program Files\mosquitto\mosquitto_pub.exe" -h localhost -t "marine/zone-b/sensors" -m "{bad-json"
 ```
 
-Invalid input is never converted into a normal risk classification:
+Fog logs `INVALID MQTT MESSAGE` and continues. Automated tests also cover
+missing fields and duplicate events.
 
-```text
-Sensor Validity    : INVALID
-Risk Prediction    : BLOCKED
-Recommended Action:
-CHECK / RECALIBRATE SENSOR
-```
+## Troubleshooting
 
-## Configuration
+| Problem | Solution |
+|---|---|
+| `mosquitto` not recognized | Use `& "C:\Program Files\mosquitto\mosquitto.exe" -v` or reinstall it from the official site. |
+| Connection refused / Edge cannot connect | Start Terminal 1 and confirm it listens on 1883; check environment host/port. |
+| Port 1883 already in use | Run `Get-NetTCPConnection -LocalPort 1883`; an existing Mosquitto service may already be usable. |
+| `No module named paho` | Activate `.venv`, then run `python -m pip install -r requirements.txt`. |
+| Fog receives no messages | Start Broker, Fog, then Edge; verify all use the same host, port, and zone. |
+| Offline queue not clearing | Fog must be running to send ACKs. Wait for replay and check queue warnings; do not delete unacknowledged data. |
+| Wrong working directory | `Get-Location` must end in `marine-edge-fog` before `python -m mqtt...`. |
+| Virtual environment inactive | Activate it, or use `.\.venv\Scripts\python.exe`. |
+| Graceful shutdown / Ctrl+C | Press once and allow a few seconds for the current MQTT operation to close. |
 
-All physical limits, rate-of-change thresholds, stuck-reading count, risk
-rules, risk categories, device identifiers, and automatic-mode interval are in
-`config.py`. The risk thresholds are prototype assumptions and require review
-against local historical and laboratory-confirmed data before field use.
+## Risk disclaimer
 
-## Planned Phase 2 (not implemented here)
-
-Phase 2 can add MQTT communication between the simulated/physical Edge node and
-a Fog service, duplicate-event protection, offline synchronisation, and a
-simulated sampling-command acknowledgement. ESP32, Raspberry Pi, database,
-dashboard, machine learning, and physical pump control remain outside Phase 1.
+Limits and risk rules in `config.py` are prototype engineering assumptions.
+They require validation with local history and laboratory-confirmed data before
+operational or seafood-safety use.

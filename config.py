@@ -1,4 +1,7 @@
-"""Configuration for the Phase 1 marine Edge simulation prototype."""
+"""Central configuration for the marine Edge-Fog prototype."""
+
+import os
+from pathlib import Path
 
 DEVICE_ID = "coastal-node-01"
 ZONE_ID = "zone-b"
@@ -80,3 +83,17 @@ RISK_LEVEL_THRESHOLDS = {
 
 AUTOMATIC_INTERVAL_SECONDS = 3
 
+# Phase 2 MQTT settings. Environment variables allow local overrides without
+# putting credentials or machine-specific settings in Git.
+MQTT_BROKER_HOST = os.getenv("MARINE_MQTT_HOST", "localhost")
+MQTT_BROKER_PORT = int(os.getenv("MARINE_MQTT_PORT", "1883"))
+MQTT_KEEPALIVE_SECONDS = int(os.getenv("MARINE_MQTT_KEEPALIVE", "60"))
+MQTT_QOS = 1
+MQTT_SCHEMA_VERSION = "1.0"
+MQTT_TOPIC_ROOT = os.getenv("MARINE_MQTT_TOPIC_ROOT", "marine")
+MQTT_RECONNECT_MIN_SECONDS = 1
+MQTT_RECONNECT_MAX_SECONDS = 30
+EDGE_PUBLISH_INTERVAL_SECONDS = float(os.getenv("MARINE_EDGE_INTERVAL", "3"))
+OFFLINE_QUEUE_PATH = Path(
+    os.getenv("MARINE_OFFLINE_QUEUE", "data/offline_queue.jsonl")
+)

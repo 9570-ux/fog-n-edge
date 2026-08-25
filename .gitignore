@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 .pytest_cache/
+.test-tmp/
 .mypy_cache/
 .ruff_cache/
 .coverage
@@ -39,3 +40,8 @@ temp/
 build/
 dist/
 *.egg-info/
+
+# Phase 2 runtime data (keep the directory placeholder in Git)
+data/*.jsonl
+data/*.jsonl.tmp
+!data/.gitkeep
