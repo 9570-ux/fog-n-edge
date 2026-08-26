@@ -1,3 +1,4 @@
 # Phase 2 MQTT client and automated test runner.
 paho-mqtt>=2.1,<3.0
+Flask>=3.1,<4.0
 pytest>=8.0,<10.0

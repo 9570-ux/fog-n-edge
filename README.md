@@ -2,7 +2,8 @@
 
 Software prototype for a B.Tech project that simulates marine measurements,
 checks sensor quality, estimates preliminary environmental HAB risk at an Edge
-node, and delivers traceable events to a Fog node through MQTT.
+node, delivers traceable events to a Fog node through MQTT, and stores and
+visualizes them locally.
 
 > **Safety limitation:** This prototype predicts environmental HAB risk only.
 > It does not directly detect toxins, identify toxin-producing algal strains, or
@@ -14,7 +15,7 @@ node, and delivers traceable events to a Fog node through MQTT.
 |---|---|
 | Phase 1 — Sensor Simulation & Edge Risk | ✅ Completed |
 | Phase 2 — MQTT Edge-Fog Communication | ✅ Completed |
-| Phase 3 — Database & Dashboard | ⏳ Pending |
+| Phase 3 — Database & Dashboard | ✅ Completed |
 | Phase 4 — Decision / Sampling Logic | ⏳ Pending |
 | Phase 5 — ESP32 Hardware Integration | ⏳ Pending |
 | Phase 6 — Pump & Alert Integration | ⏳ Pending |
@@ -22,8 +23,9 @@ node, and delivers traceable events to a Fog node through MQTT.
 | Phase 8 — Final Integration & Testing | ⏳ Pending |
 
 Phase 1 remains independently runnable. Phase 2 is software-only on one Windows
-laptop; no ESP32, Raspberry Pi, physical sensor, pump, database, dashboard, or
-machine-learning component is included.
+laptop. Phase 3 adds local SQLite persistence and a Flask dashboard. ESP32,
+Raspberry Pi, physical sensors, pump control, and machine learning remain future
+work.
 
 ## Architecture
 
@@ -40,7 +42,9 @@ Phase 1 simulator -> validation -> Edge risk engine
                                       |
                          validation + duplicate check
                                       |
-                                application ACK
+                         SQLite database + alert
+                              |               |
+                       application ACK   Flask dashboard
 ```
 
 Edge saves every event to `data/offline_queue.jsonl` before publishing and
@@ -82,14 +86,27 @@ marine-edge-fog/
 |   |-- message_utils.py
 |   |-- edge_publisher.py
 |   `-- fog_receiver.py
+|-- database/
+|   |-- __init__.py
+|   `-- db.py
+|-- dashboard/
+|   |-- __init__.py
+|   |-- app.py
+|   |-- templates/
+|   |   `-- index.html
+|   `-- static/
+|       |-- style.css
+|       `-- dashboard.js
 |-- data/
 |   `-- .gitkeep
 `-- tests/
     |-- test_scenarios.py
-    `-- test_phase2_mqtt.py
+    |-- test_phase2_mqtt.py
+    `-- test_phase3_database_dashboard.py
 ```
 
-The runtime queue is generated automatically and ignored by Git.
+The runtime queue and SQLite database are generated automatically and ignored
+by Git.
 
 ## Requirements and initial setup
 
@@ -97,18 +114,25 @@ The runtime queue is generated automatically and ignored by Git.
 - Python 3.10 or newer (Python 3)
 - Existing project virtual environment at `..\.venv`
 - `paho-mqtt` (installed through `requirements.txt`)
+- Flask (installed through `requirements.txt`)
 - Eclipse Mosquitto MQTT Broker for Windows
 
 The working virtual environment is in the parent `fog and edge computin`
-folder. For a first-time setup, run:
+folder. On a fresh computer, clone and set up with:
 
 ```powershell
+cd "C:\Users\Manya Kothari\Desktop\fog and edge computin"
+git clone https://github.com/9570-ux/fog-n-edge.git marine-edge-fog
 cd "C:\Users\Manya Kothari\Desktop\fog and edge computin\marine-edge-fog"
 python -m venv ..\.venv
 ..\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
+
+SQLite uses Python's standard library and initializes its tables automatically.
+There is no separate database setup command. The runtime database is created at
+`data/marine_monitoring.db` when Fog or the dashboard first starts.
 
 If script activation is blocked for the current PowerShell session:
 
@@ -327,6 +351,134 @@ With Broker and Fog running:
 Fog logs `INVALID MQTT MESSAGE` and continues. Automated tests also cover
 missing fields and duplicate events.
 
+# Running Phase 3
+
+Phase 3 keeps the Phase 1 and Phase 2 commands and adds automatic SQLite
+storage plus a fourth dashboard terminal. Fog stores each new event before
+sending its acknowledgement. Database uniqueness on `device_id +
+sequence_number` prevents duplicates even after Fog restarts.
+
+## Terminal 1 — MQTT Broker (optional when service is running)
+
+```powershell
+netstat -ano | findstr :1883
+```
+
+If no `LISTENING` result appears:
+
+```powershell
+& "C:\Program Files\Mosquitto\mosquitto.exe" -v
+```
+
+## Terminal 2 — Fog Receiver + SQLite storage
+
+```powershell
+cd "C:\Users\Manya Kothari\Desktop\fog and edge computin\marine-edge-fog"
+..\.venv\Scripts\Activate.ps1
+python -m mqtt.fog_receiver
+```
+
+The database and tables initialize automatically at
+`data/marine_monitoring.db`. A new event produces `Stored event in SQLite
+database.` before the normal Fog output and acknowledgement.
+
+## Terminal 3 — Edge Publisher
+
+```powershell
+cd "C:\Users\Manya Kothari\Desktop\fog and edge computin\marine-edge-fog"
+..\.venv\Scripts\Activate.ps1
+python -m mqtt.edge_publisher
+```
+
+## Terminal 4 — Dashboard
+
+```powershell
+cd "C:\Users\Manya Kothari\Desktop\fog and edge computin\marine-edge-fog"
+..\.venv\Scripts\Activate.ps1
+python -m dashboard.app
+```
+
+Expected output:
+
+```text
+Dashboard running at http://127.0.0.1:5000
+```
+
+Open `http://127.0.0.1:5000` in a browser. The page polls its read-only APIs
+every five seconds, so new database events appear without restarting Flask.
+Chart.js is loaded from the jsDelivr CDN; charts require internet access to
+load that frontend library, while cards, tables, APIs, and stored data remain
+local.
+
+## Dashboard content and APIs
+
+- System status, latest timestamp, device, zone, and total stored readings.
+- Five latest sensor cards and a prominent LOW/MEDIUM/HIGH/CRITICAL/INVALID
+  screening result.
+- Database-backed history graphs with latest 20, 50, or 100 readings.
+- Recent-events table and filterable persistent alerts.
+- Empty database displays `Waiting for sensor data...` safely.
+- INVALID events remain traceable, show `BLOCKED` instead of a fake score, and
+  create an `INVALID SENSOR` alert.
+
+Read-only endpoints:
+
+```text
+GET /api/latest
+GET /api/history?limit=20
+GET /api/alerts?level=CRITICAL
+GET /api/status
+```
+
+Alert records are created for MEDIUM, HIGH, CRITICAL, and INVALID results. LOW
+readings are stored but do not create an alert. These are environmental
+screening alerts, not confirmation of toxin contamination.
+
+## Phase 3 automated verification
+
+```powershell
+cd "C:\Users\Manya Kothari\Desktop\fog and edge computin\marine-edge-fog"
+..\.venv\Scripts\Activate.ps1
+python -m pytest
+```
+
+Current suite breakdown:
+
+```text
+Phase 1: 11 tests
+Phase 2:  9 tests
+Phase 3: 13 tests
+Total:   33 tests
+```
+
+Phase 3 tests use an isolated test database and never modify
+`data/marine_monitoring.db`.
+
+## Phase 3 manual verification results
+
+The complete local flow was verified on Windows with the installed Mosquitto
+service:
+
+- Fog connected, stored sequential MQTT events, then acknowledged Edge.
+- LOW, MEDIUM, CRITICAL, and INVALID events were persisted and displayed.
+- INVALID displayed `BLOCKED` with no fabricated numeric risk score.
+- Publishing the same device/sequence twice created only one database event.
+- MEDIUM, CRITICAL, and INVALID SENSOR alerts appeared; filtering worked.
+- Dashboard cards, recent table, 20/50 history controls, both database-backed
+  charts, and all four read-only APIs worked without restarting Flask.
+- After stopping and restarting the dashboard, 51 stored readings remained,
+  confirming SQLite persistence.
+- Empty-database behavior is covered by the automated dashboard/API test and
+  displays `Waiting for sensor data...`.
+
+## Normal / later Phase 3 run
+
+1. Confirm port 1883 is listening.
+2. Run `python -m mqtt.fog_receiver` in the activated project environment.
+3. Run `python -m mqtt.edge_publisher` in another activated terminal.
+4. Run `python -m dashboard.app` in a fourth activated terminal.
+5. Open `http://127.0.0.1:5000`; stop services with `Ctrl+C`.
+
 ## Troubleshooting
 
 | Problem | Solution |
@@ -343,6 +495,15 @@ missing fields and duplicate events.
 | Wrong working directory | `Get-Location` must end in `marine-edge-fog` before `python -m mqtt...`. |
 | Virtual environment inactive | Run `..\.venv\Scripts\Activate.ps1`, or use `..\.venv\Scripts\python.exe`. |
 | Graceful shutdown / Ctrl+C | Press once and allow a few seconds for the current MQTT operation to close. |
+| `No module named flask` | Activate `..\.venv`, then run `python -m pip install -r requirements.txt`. |
+| Database file not created | Start Fog or dashboard from the project folder and confirm the `data` folder is writable. Initialization is automatic. |
+| `database is locked` | Stop duplicate Fog/dashboard processes, wait a few seconds, then use one instance of each. SQLite already waits briefly for normal concurrent access. |
+| Dashboard opens but shows no data | Start Broker, Fog, and Edge in that order; confirm Fog logs `Stored event in SQLite database.` |
+| MQTT works but database does not update | Confirm the running Fog is this Phase 3 project and check its terminal for `DATABASE ERROR`. |
+| Browser cannot connect to localhost | Confirm Terminal 4 prints the dashboard URL and open exactly `http://127.0.0.1:5000`. |
+| Port 5000 already in use | Stop the other Flask process, or set `$env:MARINE_DASHBOARD_PORT = "5001"` before running the dashboard and open that port. |
+| INVALID sensor shows `None` | This is expected only for the numeric risk score; the dashboard shows `BLOCKED` and `INVALID`, not a fabricated risk number. |
+| Charts have no data | Generate events through Edge/Fog. Also ensure internet is available for the Chart.js CDN. |
 
 ## Quick start for later runs
 

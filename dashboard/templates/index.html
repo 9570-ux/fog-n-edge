@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Marine HAB Monitoring Dashboard</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <header>
+    <div>
+      <p class="eyebrow">EDGE–FOG ENVIRONMENTAL MONITORING</p>
+      <h1>Marine HAB Early-Warning Dashboard</h1>
+      <p class="subtitle">Zone-aware environmental screening and traceable Fog storage</p>
+    </div>
+    <div id="liveBadge" class="live-badge waiting">WAITING FOR DATA</div>
+  </header>
+
+  <main>
+    <section class="status-grid" aria-label="System status">
+      <article><span>Fog data status</span><strong id="fogStatus">WAITING</strong></article>
+      <article><span>Database</span><strong id="dbStatus">CONNECTED</strong></article>
+      <article><span>Zone / Device</span><strong id="identity">—</strong></article>
+      <article><span>Total readings</span><strong id="totalReadings">0</strong></article>
+      <article class="wide"><span>Latest data timestamp</span><strong id="latestTimestamp">Waiting for sensor data...</strong></article>
+    </section>
+
+    <section>
+      <div class="section-heading"><div><p class="eyebrow">LATEST EVENT</p><h2>Sensor readings</h2></div></div>
+      <div class="sensor-grid">
+        <article class="sensor"><span>Temperature</span><strong id="temperature">—</strong><small>°C</small></article>
+        <article class="sensor"><span>pH</span><strong id="ph">—</strong><small>pH</small></article>
+        <article class="sensor"><span>Salinity</span><strong id="salinity">—</strong><small>PSU</small></article>
+        <article class="sensor"><span>Turbidity</span><strong id="turbidity">—</strong><small>NTU</small></article>
+        <article class="sensor"><span>Dissolved oxygen</span><strong id="oxygen">—</strong><small>mg/L</small></article>
+      </div>
+    </section>
+
+    <section id="riskCard" class="risk-card empty">
+      <div><p class="eyebrow">CURRENT SCREENING RESULT</p><h2 id="riskLevel">NO DATA</h2></div>
+      <div class="risk-metrics"><span>Sensor validity<strong id="validity">—</strong></span><span>Risk score<strong id="riskScore">—</strong></span></div>
+      <p>Risk levels represent environmental screening indicators and do not confirm toxin presence. Laboratory verification is required for toxin confirmation.</p>
+    </section>
+
+    <section>
+      <div class="section-heading">
+        <div><p class="eyebrow">DATABASE HISTORY</p><h2>Historical trends</h2></div>
+        <label>Readings <select id="historyLimit"><option>20</option><option>50</option><option>100</option></select></label>
+      </div>
+      <div id="chartEmpty" class="empty-message">Waiting for sensor data...</div>
+      <div class="chart-grid">
+        <article><canvas id="waterChart"></canvas></article>
+        <article><canvas id="riskChart"></canvas></article>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-heading"><div><p class="eyebrow">TRACEABILITY</p><h2>Recent readings</h2></div></div>
+      <div class="table-wrap"><table><thead><tr><th>Timestamp</th><th>Device</th><th>Zone</th><th>Temp</th><th>pH</th><th>Salinity</th><th>Turbidity</th><th>DO</th><th>Validity</th><th>Score</th><th>Level</th></tr></thead><tbody id="historyBody"><tr><td colspan="11">Waiting for sensor data...</td></tr></tbody></table></div>
+    </section>
+
+    <section>
+      <div class="section-heading"><div><p class="eyebrow">ACTION LOG</p><h2>Alerts</h2></div><label>Level <select id="alertLevel"><option value="">All</option><option>MEDIUM</option><option>HIGH</option><option>CRITICAL</option><option>INVALID SENSOR</option></select></label></div>
+      <div class="table-wrap"><table><thead><tr><th>Timestamp</th><th>Device</th><th>Zone</th><th>Alert type</th><th>Message</th><th>Status</th></tr></thead><tbody id="alertsBody"><tr><td colspan="6">No alerts recorded.</td></tr></tbody></table></div>
+    </section>
+  </main>
+  <footer>Local Phase 3 prototype • Data refreshes every 5 seconds</footer>
+  <script src="{{ url_for('static', filename='dashboard.js') }}"></script>
+</body>
+</html>

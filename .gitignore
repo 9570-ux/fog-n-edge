@@ -45,3 +45,10 @@ dist/
 data/*.jsonl
 data/*.jsonl.tmp
 !data/.gitkeep
+
+# Phase 3 SQLite runtime databases and sidecar files
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3

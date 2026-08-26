@@ -97,3 +97,8 @@ EDGE_PUBLISH_INTERVAL_SECONDS = float(os.getenv("MARINE_EDGE_INTERVAL", "3"))
 OFFLINE_QUEUE_PATH = Path(
     os.getenv("MARINE_OFFLINE_QUEUE", "data/offline_queue.jsonl")
 )
+
+# Phase 3 local persistence and dashboard settings.
+DATABASE_PATH = Path(os.getenv("MARINE_DATABASE_PATH", "data/marine_monitoring.db"))
+DASHBOARD_HOST = os.getenv("MARINE_DASHBOARD_HOST", "127.0.0.1")
+DASHBOARD_PORT = int(os.getenv("MARINE_DASHBOARD_PORT", "5000"))

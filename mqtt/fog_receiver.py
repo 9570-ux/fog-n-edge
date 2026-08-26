@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 import paho.mqtt.client as mqtt
 
 from config import MQTT_BROKER_HOST, MQTT_BROKER_PORT, MQTT_KEEPALIVE_SECONDS, MQTT_QOS
+from database import MarineDatabase
 from mqtt.message_utils import (
     DuplicateDetector, build_ack, parse_sensor_message, serialize_message, topic,
 )
@@ -16,9 +18,15 @@ LOG = logging.getLogger("fog_receiver")
 
 
 class FogReceiver:
-    def __init__(self) -> None:
+    def __init__(self, database: MarineDatabase | None = None,
+                 client_id: str | None = None) -> None:
         self.detector = DuplicateDetector()
-        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="marine-fog-node")
+        self.database = database or MarineDatabase()
+        # A process-specific default avoids MQTT client-ID collisions when an
+        # earlier Fog terminal is still running during local development.
+        resolved_client_id = client_id or f"marine-fog-node-{os.getpid()}"
+        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2,
+                                  client_id=resolved_client_id)
         self.client.on_connect = self._on_connect
         self.client.on_disconnect = self._on_disconnect
         self.client.on_message = self._on_message
@@ -49,10 +57,20 @@ class FogReceiver:
 
         duplicate = self.detector.is_duplicate(message)
         status = "DUPLICATE" if duplicate else "RECEIVED"
+        if not duplicate:
+            try:
+                inserted, _ = self.database.insert_event(message)
+            except Exception:
+                LOG.exception("DATABASE ERROR - event not acknowledged and remains queued")
+                return
+            if not inserted:
+                duplicate = True
+                status = "DUPLICATE"
         if duplicate:
             LOG.warning("DUPLICATE MESSAGE IGNORED - Device: %s Sequence: %s",
                         message["device_id"], message["sequence_number"])
         else:
+            LOG.info("Stored event in SQLite database.")
             self._display(message)
         acknowledgement = build_ack(message, status)
         client.publish(topic(message["zone_id"], "ack"), serialize_message(acknowledgement),
