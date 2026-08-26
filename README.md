@@ -351,11 +351,11 @@ schemas/sequences, duplicates, queue ordering/cleanup, and acknowledgements.
 Verified result:
 
 ```text
-50 passed
+56 passed
 Phase 1 tests: 11
 Phase 2 tests: 11
 Phase 3 tests: 13
-Phase 4 tests: 15
+Phase 4 tests: 21
 ```
 
 ## Manual Phase 2 verification results
@@ -580,7 +580,7 @@ new sample request in one SQLite transaction before acknowledging Edge.
 |---|---|---|
 | LOW | `MONITOR` | No |
 | MEDIUM | `RETEST` | No |
-| HIGH | `HOLD_HARVEST` | Yes, subject to cooldown |
+| HIGH | `COLLECT_SAMPLE` (harvest hold recommended) | Yes, subject to cooldown |
 | CRITICAL | `COLLECT_SAMPLE` | Yes, subject to cooldown |
 | INVALID | `SENSOR_MAINTENANCE` | No |
 
@@ -662,7 +662,7 @@ $env:MARINE_SAMPLING_CLIENT_ID = "marine-sampling-simulator-01"
 ```
 
 Run all automated tests separately with `python -m pytest`. Current verified
-result: `50 passed` (`11 + 11 + 13 + 15` across Phases 1–4).
+result: `56 passed` (`11 + 11 + 13 + 21` across Phases 1–4).
 
 ## Basic Git commands
 

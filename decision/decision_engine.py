@@ -18,8 +18,8 @@ class DecisionEngine:
             "reason": "Moderate environmental stress detected; increased monitoring recommended.",
         },
         "HIGH": {
-            "action": "HOLD_HARVEST", "sampling_required": True, "priority": "HIGH",
-            "reason": "High environmental HAB-associated risk; hold/verification and sampling recommended.",
+            "action": "COLLECT_SAMPLE", "sampling_required": True, "priority": "HIGH",
+            "reason": "High environmental HAB-associated risk; verification sampling and a harvest hold are recommended.",
         },
         "CRITICAL": {
             "action": "COLLECT_SAMPLE", "sampling_required": True, "priority": "CRITICAL",

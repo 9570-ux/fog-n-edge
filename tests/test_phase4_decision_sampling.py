@@ -54,7 +54,7 @@ def message(level="LOW", sequence=1, valid=True):
 @pytest.mark.parametrize("level,action,sampling,priority", [
     ("LOW", "MONITOR", False, "NORMAL"),
     ("MEDIUM", "RETEST", False, "WARNING"),
-    ("HIGH", "HOLD_HARVEST", True, "HIGH"),
+    ("HIGH", "COLLECT_SAMPLE", True, "HIGH"),
     ("CRITICAL", "COLLECT_SAMPLE", True, "CRITICAL"),
 ])
 def test_decision_rules(level, action, sampling, priority):
@@ -148,9 +148,68 @@ def test_phase4_dashboard_apis(database):
     app = create_app(TEST_DB)
     app.config.update(TESTING=True)
     client = app.test_client()
-    assert client.get("/api/decision/latest").get_json()["decision"]["action"] == "HOLD_HARVEST"
+    assert client.get("/api/decision/latest").get_json()["decision"]["action"] == "COLLECT_SAMPLE"
     assert len(client.get("/api/decisions?limit=20").get_json()["decisions"]) == 1
     assert len(client.get("/api/samples?limit=20").get_json()["samples"]) == 1
+
+
+class PublishResult:
+    rc = 0
+
+
+class FakeMqttClient:
+    def __init__(self):
+        self.published = []
+
+    def publish(self, topic_name, payload, qos):
+        self.published.append((topic_name, payload, qos))
+        return PublishResult()
+
+
+def send_through_fog(receiver, client, event):
+    incoming = type("Incoming", (), {
+        "topic": f"marine/{event['zone_id']}/sensors",
+        "payload": serialize_message(event).encode(),
+    })()
+    receiver._on_message(client, None, incoming)
+
+
+@pytest.mark.parametrize("level,valid,action,sampling", [
+    ("LOW", True, "MONITOR", False),
+    ("MEDIUM", True, "RETEST", False),
+    ("HIGH", True, "COLLECT_SAMPLE", True),
+    ("CRITICAL", True, "COLLECT_SAMPLE", True),
+    ("LOW", False, "SENSOR_MAINTENANCE", False),
+])
+def test_fog_callback_persists_each_decision_and_exposes_it_via_api(
+        database, level, valid, action, sampling):
+    receiver = FogReceiver(database)
+    send_through_fog(receiver, FakeMqttClient(), message(level, valid=valid))
+
+    app = create_app(TEST_DB)
+    app.config.update(TESTING=True)
+    api = app.test_client()
+    latest = api.get("/api/decision/latest").get_json()["decision"]
+    assert latest["action"] == action
+    assert latest["sampling_required"] is sampling
+    assert len(api.get("/api/decisions").get_json()["decisions"]) == 1
+    samples = api.get("/api/samples").get_json()["samples"]
+    assert len(samples) == int(sampling)
+    if sampling:
+        assert latest["sample_id"].startswith("SAMPLE-")
+
+
+def test_fog_callback_preserves_duplicate_and_cooldown_protection(database):
+    receiver = FogReceiver(database)
+    client = FakeMqttClient()
+    first = message("HIGH", 1)
+    send_through_fog(receiver, client, first)
+    send_through_fog(receiver, client, first)
+    send_through_fog(receiver, client, message("CRITICAL", 2))
+    assert database.event_count() == 2
+    assert len(database.decisions()) == 2
+    assert len(database.samples()) == 1
+    assert database.latest_decision()["status"] == "SAMPLE_SUPPRESSED_COOLDOWN_ACTIVE"
 
 
 def test_fog_persists_before_publishing_command_and_sensor_ack(database):
@@ -160,19 +219,8 @@ def test_fog_persists_before_publishing_command_and_sensor_ack(database):
         topic = f"marine/{event['zone_id']}/sensors"
         payload = serialize_message(event).encode()
 
-    class PublishResult:
-        rc = 0
-
-    class FakeClient:
-        def __init__(self):
-            self.published = []
-
-        def publish(self, topic_name, payload, qos):
-            self.published.append((topic_name, payload, qos))
-            return PublishResult()
-
     receiver = FogReceiver(database)
-    client = FakeClient()
+    client = FakeMqttClient()
     receiver._on_message(client, None, Incoming())
     assert len(database.decisions()) == 1
     assert len(database.samples()) == 1

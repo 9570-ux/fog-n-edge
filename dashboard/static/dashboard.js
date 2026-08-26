@@ -69,7 +69,7 @@ async function loadAlerts() {
 async function loadDecision() {
   const {decision} = await json('/api/decision/latest');
   if (!decision) return;
-  const displayNames = {MONITOR:'Continue monitoring',RETEST:'Retest recommended',HOLD_HARVEST:'Hold / verification recommended',COLLECT_SAMPLE:'Collect verification sample',SENSOR_MAINTENANCE:'Sensor maintenance'};
+  const displayNames = {MONITOR:'Continue monitoring',RETEST:'Retest recommended',COLLECT_SAMPLE:'Collect verification sample',SENSOR_MAINTENANCE:'Sensor maintenance'};
   byId('decisionAction').textContent = decision.action.replaceAll('_',' ');
   byId('decisionDisplay').textContent = displayNames[decision.action] || decision.action;
   byId('decisionPriority').textContent = decision.priority;
