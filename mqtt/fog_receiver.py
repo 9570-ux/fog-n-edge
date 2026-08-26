@@ -82,6 +82,10 @@ class FogReceiver:
         # sequence, because a previous database attempt may have rolled back.
         memory_duplicate = self.detector.is_duplicate(message)
         try:
+            LOG.info(
+                "Invoking Phase 4 event/decision transaction: device=%s sequence=%s",
+                message["device_id"], message["sequence_number"],
+            )
             result = self.database.process_event(
                 message, self.decision_engine, self.sampling_manager
             )
@@ -96,10 +100,17 @@ class FogReceiver:
         else:
             if memory_duplicate:
                 LOG.info("Retry completed after an earlier in-memory observation.")
-            LOG.info("Stored event and decision in SQLite database.")
+            LOG.info("Sensor event persisted: event_id=%s", result["event_id"])
+            LOG.info(
+                "Decision persisted successfully: decision_id=%s action=%s risk=%s",
+                result["decision"]["decision_id"], result["decision"]["action"],
+                result["decision"]["risk_level"],
+            )
             self._display(message)
             self._display_decision(result["decision"], result["sample"])
             if result["command"]:
+                LOG.info("Sampling required. Sample created: %s",
+                         result["sample"]["sample_id"])
                 command_payload = serialize_message(result["command"])
                 publish_result = client.publish(
                     topic(message["zone_id"], "commands"), command_payload,
@@ -164,6 +175,7 @@ class FogReceiver:
         print("========================================")
 
     def run(self) -> None:
+        LOG.info("Active SQLite database: %s", self.database.path)
         LOG.info("Connecting to MQTT broker at %s:%s with client ID %s...",
                  MQTT_BROKER_HOST, MQTT_BROKER_PORT, self.client_id)
         try:

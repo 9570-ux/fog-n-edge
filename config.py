@@ -3,6 +3,16 @@
 import os
 from pathlib import Path
 
+PROJECT_ROOT = Path(__file__).resolve().parent
+
+
+def project_path(environment_name: str, default: str) -> Path:
+    """Return one canonical path, independent of the process working directory."""
+    configured = Path(os.getenv(environment_name, default)).expanduser()
+    if not configured.is_absolute():
+        configured = PROJECT_ROOT / configured
+    return configured.resolve()
+
 DEVICE_ID = "coastal-node-01"
 ZONE_ID = "zone-b"
 
@@ -103,7 +113,7 @@ OFFLINE_QUEUE_PATH = Path(
 )
 
 # Phase 3 local persistence and dashboard settings.
-DATABASE_PATH = Path(os.getenv("MARINE_DATABASE_PATH", "data/marine_monitoring.db"))
+DATABASE_PATH = project_path("MARINE_DATABASE_PATH", "data/marine_monitoring.db")
 DASHBOARD_HOST = os.getenv("MARINE_DASHBOARD_HOST", "127.0.0.1")
 DASHBOARD_PORT = int(os.getenv("MARINE_DASHBOARD_PORT", "5000"))
 

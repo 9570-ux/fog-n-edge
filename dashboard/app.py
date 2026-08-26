@@ -75,6 +75,8 @@ def create_app(database_path: str | Path = DATABASE_PATH) -> Flask:
 
 def main() -> None:
     app = create_app()
+    database = app.config["MARINE_DATABASE"]
+    print(f"Active SQLite database: {database.path}")
     print(f"Dashboard running at http://{DASHBOARD_HOST}:{DASHBOARD_PORT}")
     app.run(host=DASHBOARD_HOST, port=DASHBOARD_PORT, debug=False)
 

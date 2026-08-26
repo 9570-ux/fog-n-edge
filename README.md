@@ -143,7 +143,20 @@ python -m pip install -r requirements.txt
 
 SQLite uses Python's standard library and initializes its tables automatically.
 There is no separate database setup command. The runtime database is created at
-`data/marine_monitoring.db` when Fog or the dashboard first starts.
+the canonical absolute project location
+`C:\Users\Manya Kothari\Desktop\fog and edge computin\marine-edge-fog\data\marine_monitoring.db`
+when Fog or the dashboard first starts. The default no longer depends on the
+terminal's current working directory. Both Fog and Dashboard print this active
+path at startup.
+
+Inspect the active database without changing its contents:
+
+```powershell
+python -m database.diagnostics
+```
+
+This prints the canonical path, sensor-event, decision and sample counts, plus
+the latest decision.
 
 If script activation is blocked for the current PowerShell session:
 
@@ -546,6 +559,7 @@ service:
 | Port 5000 already in use | Stop the other Flask process, or set `$env:MARINE_DASHBOARD_PORT = "5001"` before running the dashboard and open that port. |
 | INVALID sensor shows `None` | This is expected only for the numeric risk score; the dashboard shows `BLOCKED` and `INVALID`, not a fabricated risk number. |
 | Charts have no data | Generate events through Edge/Fog. Also ensure internet is available for the Chart.js CDN. |
+| `/api/decision/latest` returns `null` while sensor history grows | The usual cause is a Fog process started before Phase 4 code was loaded, or Fog/Dashboard using different relative database paths. Stop the old Fog, Edge, and Dashboard terminals with `Ctrl+C`; start the current Fog first, then Edge and Dashboard. Confirm Fog and Dashboard print the same canonical SQLite path. Wait for a new sequence—older Phase 3 rows are retained but are not silently backfilled into decisions. Run `python -m database.diagnostics` to confirm counts. |
 
 ## Quick start for later runs
 

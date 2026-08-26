@@ -97,7 +97,7 @@ class MarineDatabase:
     """Small connection-per-operation database layer safe for Flask threads."""
 
     def __init__(self, path: str | Path = DATABASE_PATH) -> None:
-        self.path = Path(path)
+        self.path = Path(path).expanduser().resolve()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.initialize()
 
@@ -299,6 +299,14 @@ class MarineDatabase:
     def event_count(self) -> int:
         with closing(self._connect()) as connection, connection:
             return int(connection.execute("SELECT COUNT(*) FROM sensor_events").fetchone()[0])
+
+    def decision_count(self) -> int:
+        with closing(self._connect()) as connection, connection:
+            return int(connection.execute("SELECT COUNT(*) FROM decisions").fetchone()[0])
+
+    def sample_count(self) -> int:
+        with closing(self._connect()) as connection, connection:
+            return int(connection.execute("SELECT COUNT(*) FROM samples").fetchone()[0])
 
     def latest_decision(self) -> dict[str, Any] | None:
         with closing(self._connect()) as connection, connection:
