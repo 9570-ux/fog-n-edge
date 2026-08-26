@@ -43,6 +43,12 @@
       <p>Risk levels represent environmental screening indicators and do not confirm toxin presence. Laboratory verification is required for toxin confirmation.</p>
     </section>
 
+    <section id="decisionCard" class="decision-card empty">
+      <div><p class="eyebrow">CURRENT DECISION</p><h2 id="decisionAction">WAITING</h2><small id="decisionDisplay">Waiting for a processed sensor event...</small></div>
+      <div class="decision-metrics"><span>Priority<strong id="decisionPriority">—</strong></span><span>Sampling required<strong id="samplingRequired">—</strong></span><span>Sample ID<strong id="currentSampleId">—</strong></span><span>Command status<strong id="commandStatus">—</strong></span></div>
+      <p id="decisionReason">No decision available.</p>
+    </section>
+
     <section>
       <div class="section-heading">
         <div><p class="eyebrow">DATABASE HISTORY</p><h2>Historical trends</h2></div>
@@ -61,11 +67,21 @@
     </section>
 
     <section>
+      <div class="section-heading"><div><p class="eyebrow">OPERATIONAL HISTORY</p><h2>Recent decisions</h2></div></div>
+      <div class="table-wrap"><table><thead><tr><th>Timestamp</th><th>Decision ID</th><th>Device</th><th>Zone</th><th>Risk</th><th>Action</th><th>Reason</th><th>Sample ID</th><th>Status</th></tr></thead><tbody id="decisionsBody"><tr><td colspan="9">Waiting for decisions...</td></tr></tbody></table></div>
+    </section>
+
+    <section>
+      <div class="section-heading"><div><p class="eyebrow">SIMULATED SAMPLING</p><h2>Sample request history</h2></div></div>
+      <div class="table-wrap"><table><thead><tr><th>Sample ID</th><th>Requested</th><th>Device</th><th>Zone</th><th>Risk</th><th>Trigger</th><th>Command</th><th>Collection</th><th>Laboratory</th></tr></thead><tbody id="samplesBody"><tr><td colspan="9">No sample requests recorded.</td></tr></tbody></table></div>
+    </section>
+
+    <section>
       <div class="section-heading"><div><p class="eyebrow">ACTION LOG</p><h2>Alerts</h2></div><label>Level <select id="alertLevel"><option value="">All</option><option>MEDIUM</option><option>HIGH</option><option>CRITICAL</option><option>INVALID SENSOR</option></select></label></div>
       <div class="table-wrap"><table><thead><tr><th>Timestamp</th><th>Device</th><th>Zone</th><th>Alert type</th><th>Message</th><th>Status</th></tr></thead><tbody id="alertsBody"><tr><td colspan="6">No alerts recorded.</td></tr></tbody></table></div>
     </section>
   </main>
-  <footer>Local Phase 3 prototype • Data refreshes every 5 seconds</footer>
+  <footer>Local Phase 4 software prototype • Sampling is simulated • Data refreshes every 5 seconds</footer>
   <script src="{{ url_for('static', filename='dashboard.js') }}"></script>
 </body>
 </html>

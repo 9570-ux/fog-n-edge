@@ -14,6 +14,8 @@ from config import (
     MQTT_RECONNECT_MIN_SECONDS,
 )
 from database import MarineDatabase
+from decision import DecisionEngine, SamplingManager
+from decision.sampling_manager import parse_command_ack
 from mqtt.message_utils import (
     DuplicateDetector, build_ack, parse_sensor_message, serialize_message, topic,
 )
@@ -26,6 +28,8 @@ class FogReceiver:
                  client_id: str = FOG_MQTT_CLIENT_ID) -> None:
         self.detector = DuplicateDetector()
         self.database = database or MarineDatabase()
+        self.decision_engine = DecisionEngine()
+        self.sampling_manager = SamplingManager()
         self.client_id = client_id
         self.stopping = threading.Event()
         self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2,
@@ -43,7 +47,10 @@ class FogReceiver:
         if reason_code == 0:
             subscription = topic("+", "sensors").replace("/+", "/+")
             client.subscribe(subscription, qos=MQTT_QOS)
-            LOG.info("Connected to MQTT broker. Subscribed to %s", subscription)
+            command_ack_subscription = topic("+", "command-ack")
+            client.subscribe(command_ack_subscription, qos=MQTT_QOS)
+            LOG.info("Connected to MQTT broker. Subscribed to %s and %s",
+                     subscription, command_ack_subscription)
         else:
             LOG.error("MQTT connection rejected: %s", reason_code)
 
@@ -61,32 +68,68 @@ class FogReceiver:
             LOG.info("Disconnected from MQTT broker.")
 
     def _on_message(self, client: mqtt.Client, userdata: Any, incoming: mqtt.MQTTMessage) -> None:
+        if str(getattr(incoming, "topic", "")).endswith("/command-ack"):
+            self._handle_command_ack(incoming.payload)
+            return
         try:
             message = parse_sensor_message(incoming.payload)
         except ValueError as exc:
             LOG.warning("INVALID MQTT MESSAGE - Reason: %s", exc)
             return
 
-        duplicate = self.detector.is_duplicate(message)
+        # SQLite is the durable source of truth for duplicate detection. Always
+        # retry the transaction even when the in-memory detector has seen the
+        # sequence, because a previous database attempt may have rolled back.
+        memory_duplicate = self.detector.is_duplicate(message)
+        try:
+            result = self.database.process_event(
+                message, self.decision_engine, self.sampling_manager
+            )
+        except Exception:
+            LOG.exception("PROCESSING ERROR - event not acknowledged and remains queued")
+            return
+        duplicate = not result["inserted"]
         status = "DUPLICATE" if duplicate else "RECEIVED"
-        if not duplicate:
-            try:
-                inserted, _ = self.database.insert_event(message)
-            except Exception:
-                LOG.exception("DATABASE ERROR - event not acknowledged and remains queued")
-                return
-            if not inserted:
-                duplicate = True
-                status = "DUPLICATE"
         if duplicate:
             LOG.warning("DUPLICATE MESSAGE IGNORED - Device: %s Sequence: %s",
                         message["device_id"], message["sequence_number"])
         else:
-            LOG.info("Stored event in SQLite database.")
+            if memory_duplicate:
+                LOG.info("Retry completed after an earlier in-memory observation.")
+            LOG.info("Stored event and decision in SQLite database.")
             self._display(message)
+            self._display_decision(result["decision"], result["sample"])
+            if result["command"]:
+                command_payload = serialize_message(result["command"])
+                publish_result = client.publish(
+                    topic(message["zone_id"], "commands"), command_payload,
+                    qos=MQTT_QOS,
+                )
+                if getattr(publish_result, "rc", mqtt.MQTT_ERR_SUCCESS) == mqtt.MQTT_ERR_SUCCESS:
+                    self.database.update_sample_command_ack(
+                        result["sample"]["sample_id"], "PUBLISHED"
+                    )
+                    LOG.info("Published simulated sampling command for %s.",
+                             result["sample"]["sample_id"])
         acknowledgement = build_ack(message, status)
         client.publish(topic(message["zone_id"], "ack"), serialize_message(acknowledgement),
                        qos=MQTT_QOS)
+
+    def _handle_command_ack(self, payload: bytes | str) -> None:
+        try:
+            acknowledgement = parse_command_ack(payload)
+        except ValueError as exc:
+            LOG.warning("Invalid sampling command acknowledgement: %s", exc)
+            return
+        updated = self.database.update_sample_command_ack(
+            acknowledgement["sample_id"], acknowledgement["status"]
+        )
+        if updated:
+            LOG.info("Simulated sampling command acknowledged for %s.",
+                     acknowledgement["sample_id"])
+        else:
+            LOG.warning("Command acknowledgement references unknown sample %s.",
+                        acknowledgement["sample_id"])
 
     @staticmethod
     def _display(message: dict[str, Any]) -> None:
@@ -105,6 +148,19 @@ class FogReceiver:
         print(f"Edge Risk Score : {message['edge_risk_score']} / 100")
         print(f"Edge Risk Level : {message['edge_risk_level']}")
         print("MQTT Status     : RECEIVED")
+        print("========================================")
+
+    @staticmethod
+    def _display_decision(decision: dict[str, Any], sample: dict[str, Any] | None) -> None:
+        print("\nFOG DECISION")
+        print(f"Decision ID      : {decision['decision_id']}")
+        print(f"Action           : {decision['action']}")
+        print(f"Priority         : {decision['priority']}")
+        print(f"Reason           : {decision['reason']}")
+        print(f"Sampling Required: {'YES' if decision['sampling_required'] else 'NO'}")
+        print(f"Decision Status  : {decision['status']}")
+        if sample:
+            print(f"Sample ID        : {sample['sample_id']}")
         print("========================================")
 
     def run(self) -> None:

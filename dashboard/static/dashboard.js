@@ -66,8 +66,32 @@ async function loadAlerts() {
   byId('alertsBody').innerHTML = alerts.length ? alerts.map(a => `<tr><td>${escapeHtml(a.created_timestamp)}</td><td>${escapeHtml(a.device_id)}</td><td>${escapeHtml(a.zone_id)}</td><td>${badge(a.alert_level)}</td><td>${escapeHtml(a.message)}</td><td>${escapeHtml(a.status)}</td></tr>`).join('') : '<tr><td colspan="6">No alerts recorded.</td></tr>';
 }
 
+async function loadDecision() {
+  const {decision} = await json('/api/decision/latest');
+  if (!decision) return;
+  const displayNames = {MONITOR:'Continue monitoring',RETEST:'Retest recommended',HOLD_HARVEST:'Hold / verification recommended',COLLECT_SAMPLE:'Collect verification sample',SENSOR_MAINTENANCE:'Sensor maintenance'};
+  byId('decisionAction').textContent = decision.action.replaceAll('_',' ');
+  byId('decisionDisplay').textContent = displayNames[decision.action] || decision.action;
+  byId('decisionPriority').textContent = decision.priority;
+  byId('samplingRequired').textContent = decision.sampling_required ? 'YES' : 'NO';
+  byId('currentSampleId').textContent = shown(decision.sample_id);
+  byId('commandStatus').textContent = shown(decision.command_status);
+  byId('decisionReason').textContent = decision.reason;
+  byId('decisionCard').className = `decision-card ${decision.action.toLowerCase()}`;
+}
+
+async function loadDecisions() {
+  const {decisions} = await json('/api/decisions?limit=50');
+  byId('decisionsBody').innerHTML = decisions.length ? decisions.map(d => `<tr><td>${escapeHtml(d.decision_timestamp)}</td><td>${escapeHtml(d.decision_id)}</td><td>${escapeHtml(d.device_id)}</td><td>${escapeHtml(d.zone_id)}</td><td>${badge(d.risk_level)}</td><td>${escapeHtml(d.action.replaceAll('_',' '))}</td><td>${escapeHtml(d.reason)}</td><td>${escapeHtml(shown(d.sample_id))}</td><td>${escapeHtml(d.status)}</td></tr>`).join('') : '<tr><td colspan="9">Waiting for decisions...</td></tr>';
+}
+
+async function loadSamples() {
+  const {samples} = await json('/api/samples?limit=100');
+  byId('samplesBody').innerHTML = samples.length ? samples.map(s => `<tr><td>${escapeHtml(s.sample_id)}</td><td>${escapeHtml(s.requested_at)}</td><td>${escapeHtml(s.device_id)}</td><td>${escapeHtml(s.zone_id)}</td><td>${badge(s.risk_level)}</td><td>${escapeHtml(s.trigger_reason)}</td><td>${escapeHtml(s.command_status)}</td><td>${escapeHtml(s.collection_status)}</td><td>${escapeHtml(s.laboratory_status)}</td></tr>`).join('') : '<tr><td colspan="9">No sample requests recorded.</td></tr>';
+}
+
 async function refresh() {
-  try { await Promise.all([loadStatus(),loadLatest(),loadHistory(),loadAlerts()]); }
+  try { await Promise.all([loadStatus(),loadLatest(),loadHistory(),loadAlerts(),loadDecision(),loadDecisions(),loadSamples()]); }
   catch (error) { byId('liveBadge').textContent='DASHBOARD ERROR'; byId('liveBadge').classList.add('waiting'); console.error(error); }
 }
 byId('historyLimit').addEventListener('change', loadHistory);

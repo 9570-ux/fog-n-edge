@@ -26,7 +26,9 @@ def topic(zone_id: str, channel: str) -> str:
     zone = zone_id.strip().lower()
     if not zone or "/" in zone:
         raise ValueError("zone_id must be a non-empty single topic level")
-    if channel not in {"sensors", "edge-risk", "status", "commands", "ack"}:
+    if channel not in {
+        "sensors", "edge-risk", "status", "commands", "ack", "command-ack"
+    }:
         raise ValueError(f"Unsupported MQTT channel: {channel}")
     return f"{MQTT_TOPIC_ROOT}/{zone}/{channel}"
 

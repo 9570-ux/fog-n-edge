@@ -106,3 +106,12 @@ OFFLINE_QUEUE_PATH = Path(
 DATABASE_PATH = Path(os.getenv("MARINE_DATABASE_PATH", "data/marine_monitoring.db"))
 DASHBOARD_HOST = os.getenv("MARINE_DASHBOARD_HOST", "127.0.0.1")
 DASHBOARD_PORT = int(os.getenv("MARINE_DASHBOARD_PORT", "5000"))
+
+# Phase 4 simulated decision and sampling settings (no physical actuator).
+SAMPLING_COOLDOWN_SECONDS = int(os.getenv("MARINE_SAMPLING_COOLDOWN", "900"))
+SAMPLING_COMMAND_DURATION_SECONDS = int(
+    os.getenv("MARINE_SAMPLING_DURATION", "5")
+)
+SAMPLING_RECEIVER_MQTT_CLIENT_ID = os.getenv(
+    "MARINE_SAMPLING_CLIENT_ID", "marine-sampling-simulator-01"
+)

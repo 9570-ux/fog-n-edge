@@ -16,16 +16,17 @@ visualizes them locally.
 | Phase 1 — Sensor Simulation & Edge Risk | ✅ Completed |
 | Phase 2 — MQTT Edge-Fog Communication | ✅ Completed |
 | Phase 3 — Database & Dashboard | ✅ Completed |
-| Phase 4 — Decision / Sampling Logic | ⏳ Pending |
+| Phase 4 — Decision / Simulated Sampling Logic | ✅ Completed |
 | Phase 5 — ESP32 Hardware Integration | ⏳ Pending |
 | Phase 6 — Pump & Alert Integration | ⏳ Pending |
 | Phase 7 — AI Model | ⏳ Pending |
 | Phase 8 — Final Integration & Testing | ⏳ Pending |
 
 Phase 1 remains independently runnable. Phase 2 is software-only on one Windows
-laptop. Phase 3 adds local SQLite persistence and a Flask dashboard. ESP32,
-Raspberry Pi, physical sensors, pump control, and machine learning remain future
-work.
+laptop. Phase 3 adds local SQLite persistence and a Flask dashboard. Phase 4
+adds deterministic Fog decisions, persistent sample requests, cooldown/reset
+protection, and an MQTT sampling-command simulator. ESP32, physical sensors,
+real pumps, laboratory integration, and machine learning remain future work.
 
 ## Architecture
 
@@ -42,9 +43,13 @@ Phase 1 simulator -> validation -> Edge risk engine
                                       |
                          validation + duplicate check
                                       |
-                         SQLite database + alert
-                              |               |
-                       application ACK   Flask dashboard
+                      decision + cooldown/reset rules
+                              |
+                SQLite event/alert/decision/sample transaction
+                       |              |              |
+                application ACK  Flask dashboard  sampling command
+                                                     |
+                                             simulated receiver ACK
 ```
 
 Edge saves every event to `data/offline_queue.jsonl` before publishing and
@@ -81,11 +86,16 @@ marine-edge-fog/
 |   `-- sensor_validator.py
 |-- risk/
 |   `-- edge_risk_engine.py
+|-- decision/
+|   |-- __init__.py
+|   |-- decision_engine.py
+|   `-- sampling_manager.py
 |-- mqtt/
 |   |-- __init__.py
 |   |-- message_utils.py
 |   |-- edge_publisher.py
-|   `-- fog_receiver.py
+|   |-- fog_receiver.py
+|   `-- sampling_receiver.py
 |-- database/
 |   |-- __init__.py
 |   `-- db.py
@@ -102,7 +112,8 @@ marine-edge-fog/
 `-- tests/
     |-- test_scenarios.py
     |-- test_phase2_mqtt.py
-    `-- test_phase3_database_dashboard.py
+    |-- test_phase3_database_dashboard.py
+    `-- test_phase4_decision_sampling.py
 ```
 
 The runtime queue and SQLite database are generated automatically and ignored
@@ -289,7 +300,8 @@ single-level zone names.
 | `marine/zone-b/sensors` | Complete event consumed by Fog |
 | `marine/zone-b/edge-risk` | Edge risk event for future consumers |
 | `marine/zone-b/status` | Retained ONLINE/OFFLINE/RECONNECTED state and LWT |
-| `marine/zone-b/commands` | Reserved Phase 2 route for Fog commands |
+| `marine/zone-b/commands` | Phase 4 simulated sample command from Fog |
+| `marine/zone-b/command-ack` | Phase 4 simulated receiver acknowledgement |
 | `marine/zone-b/ack` | Fog application acknowledgement |
 
 Sensor events use MQTT QoS 1. JSON includes schema version, device, zone,
@@ -339,10 +351,11 @@ schemas/sequences, duplicates, queue ordering/cleanup, and acknowledgements.
 Verified result:
 
 ```text
-35 passed
+50 passed
 Phase 1 tests: 11
 Phase 2 tests: 11
 Phase 3 tests: 13
+Phase 4 tests: 15
 ```
 
 ## Manual Phase 2 verification results
@@ -557,12 +570,106 @@ cd "C:\Users\Manya Kothari\Desktop\fog and edge computin\marine-edge-fog"
 python -m mqtt.edge_publisher
 ```
 
+# Running Phase 4
+
+Phase 4 is still a software-only prototype. Fog converts every validated risk
+result into a traceable decision and stores the event, alert, decision, and any
+new sample request in one SQLite transaction before acknowledging Edge.
+
+| Risk result | Decision | Sample request |
+|---|---|---|
+| LOW | `MONITOR` | No |
+| MEDIUM | `RETEST` | No |
+| HIGH | `HOLD_HARVEST` | Yes, subject to cooldown |
+| CRITICAL | `COLLECT_SAMPLE` | Yes, subject to cooldown |
+| INVALID | `SENSOR_MAINTENANCE` | No |
+
+Repeated HIGH/CRITICAL readings do not create a new sample during the default
+15-minute cooldown. A LOW, MEDIUM, or INVALID reading resets the elevated-risk
+episode, so a later HIGH/CRITICAL transition can create a new request. Database
+uniqueness also prevents duplicate MQTT delivery from creating duplicate
+decisions or samples.
+
+Open five PowerShell terminals in the project folder and activate the same
+environment in Terminals 2–5.
+
+## Terminal 1 — Mosquitto
+
+If `netstat -ano | findstr :1883` does not show `LISTENING`:
+
+```powershell
+& "C:\Program Files\Mosquitto\mosquitto.exe" -v
+```
+
+## Terminal 2 — Fog decision receiver
+
+```powershell
+python -m mqtt.fog_receiver
+```
+
+## Terminal 3 — Edge publisher
+
+```powershell
+python -m mqtt.edge_publisher
+```
+
+## Terminal 4 — Dashboard
+
+```powershell
+python -m dashboard.app
+```
+
+Open `http://127.0.0.1:5000`. The dashboard shows the latest decision,
+decision history, sampling requirement, sample ID, command status, and sample
+history in addition to all Phase 3 content.
+
+## Terminal 5 — Simulated sampling receiver
+
+```powershell
+python -m mqtt.sampling_receiver
+```
+
+For HIGH/CRITICAL transitions, expected flow is:
+
+```text
+Edge event -> Fog atomic storage -> decision/sample IDs
+           -> marine/<zone>/commands -> simulated receiver
+           -> marine/<zone>/command-ack -> sample command status SIMULATED_ACK
+```
+
+This receiver only prints and acknowledges the command. It does not control a
+pump, collect seawater, detect toxins, or submit a laboratory sample.
+
+Manual Phase 4 verification completed with Mosquitto: a controlled HIGH event
+created linked decision/sample IDs, Fog published the command, the simulator
+returned `SIMULATED_ACK`, and the dashboard plus all three Phase 4 APIs returned
+the persisted result successfully.
+
+Phase 4 read-only APIs:
+
+```text
+GET /api/decision/latest
+GET /api/decisions?limit=50
+GET /api/samples?limit=100
+```
+
+Optional local configuration:
+
+```powershell
+$env:MARINE_SAMPLING_COOLDOWN = "900"
+$env:MARINE_SAMPLING_DURATION = "5"
+$env:MARINE_SAMPLING_CLIENT_ID = "marine-sampling-simulator-01"
+```
+
+Run all automated tests separately with `python -m pytest`. Current verified
+result: `50 passed` (`11 + 11 + 13 + 15` across Phases 1–4).
+
 ## Basic Git commands
 
 ```powershell
 git status
 git add .
-git commit -m "Complete Phase 3 database and dashboard"
+git commit -m "Complete Phase 4 decision and automated sampling logic"
 git push
 ```
 

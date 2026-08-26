@@ -52,6 +52,24 @@ def create_app(database_path: str | Path = DATABASE_PATH) -> Flask:
             "total_readings": database.event_count(),
         })
 
+    @app.get("/api/decision/latest")
+    def api_latest_decision():
+        return jsonify({"decision": database.latest_decision()})
+
+    @app.get("/api/decisions")
+    def api_decisions():
+        limit = request.args.get("limit", default=50, type=int)
+        if limit not in VALID_LIMITS:
+            limit = 50
+        return jsonify({"decisions": database.decisions(limit), "limit": limit})
+
+    @app.get("/api/samples")
+    def api_samples():
+        limit = request.args.get("limit", default=100, type=int)
+        if limit not in VALID_LIMITS:
+            limit = 100
+        return jsonify({"samples": database.samples(limit), "limit": limit})
+
     return app
 
 
