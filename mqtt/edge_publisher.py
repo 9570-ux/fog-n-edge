@@ -10,9 +10,10 @@ from typing import Any
 import paho.mqtt.client as mqtt
 
 from config import (
-    DEVICE_ID, EDGE_PUBLISH_INTERVAL_SECONDS, MQTT_BROKER_HOST,
-    MQTT_BROKER_PORT, MQTT_KEEPALIVE_SECONDS, MQTT_QOS, OFFLINE_QUEUE_PATH,
-    ZONE_ID,
+    DEVICE_ID, EDGE_MQTT_CLIENT_ID, EDGE_PUBLISH_INTERVAL_SECONDS,
+    MQTT_BROKER_HOST, MQTT_BROKER_PORT, MQTT_KEEPALIVE_SECONDS, MQTT_QOS,
+    MQTT_RECONNECT_MAX_SECONDS, MQTT_RECONNECT_MIN_SECONDS,
+    OFFLINE_QUEUE_PATH, ZONE_ID,
 )
 from mqtt.message_utils import (
     OfflineQueue, build_sensor_message, parse_ack, serialize_message, topic,
@@ -25,11 +26,12 @@ LOG = logging.getLogger("edge_publisher")
 
 
 class EdgePublisher:
-    def __init__(self) -> None:
+    def __init__(self, client_id: str = EDGE_MQTT_CLIENT_ID,
+                 queue: OfflineQueue | None = None) -> None:
         self.simulator = MarineSensorSimulator()
         self.validator = SensorValidator()
         self.engine = EdgeRiskEngine()
-        self.queue = OfflineQueue(OFFLINE_QUEUE_PATH)
+        self.queue = queue or OfflineQueue(OFFLINE_QUEUE_PATH)
         queued = self.queue.read_all()
         if queued:
             own_sequences = [
@@ -39,13 +41,19 @@ class EdgePublisher:
             if own_sequences:
                 self.simulator.sequence_number = max(own_sequences)
         self.connected = threading.Event()
+        self.stopping = threading.Event()
         self.ever_connected = False
-        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=DEVICE_ID)
+        self.client_id = client_id
+        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2,
+                                  client_id=self.client_id)
         self.client.will_set(topic(ZONE_ID, "status"), "OFFLINE", qos=MQTT_QOS, retain=True)
         self.client.on_connect = self._on_connect
         self.client.on_disconnect = self._on_disconnect
         self.client.on_message = self._on_message
-        self.client.reconnect_delay_set(min_delay=1, max_delay=30)
+        self.client.reconnect_delay_set(
+            min_delay=MQTT_RECONNECT_MIN_SECONDS,
+            max_delay=MQTT_RECONNECT_MAX_SECONDS,
+        )
 
     def _on_connect(self, client: mqtt.Client, userdata: Any, flags: Any,
                     reason_code: Any, properties: Any) -> None:
@@ -63,8 +71,14 @@ class EdgePublisher:
     def _on_disconnect(self, client: mqtt.Client, userdata: Any,
                        disconnect_flags: Any, reason_code: Any, properties: Any) -> None:
         self.connected.clear()
-        if reason_code != 0:
-            LOG.warning("MQTT broker unavailable. Retrying connection with bounded delay...")
+        if self.stopping.is_set():
+            LOG.info("Disconnected from MQTT broker (intentional shutdown).")
+        elif reason_code != 0:
+            LOG.warning(
+                "Unexpected MQTT disconnect (%s). Check broker health and ensure "
+                "client ID %s is not running in another Edge terminal. Paho will "
+                "retry with bounded delay.", reason_code, self.client_id,
+            )
         else:
             LOG.info("Disconnected from MQTT broker.")
 
@@ -112,7 +126,8 @@ class EdgePublisher:
             self._publish(message)
 
     def run(self) -> None:
-        LOG.info("Connecting to MQTT broker at %s:%s...", MQTT_BROKER_HOST, MQTT_BROKER_PORT)
+        LOG.info("Connecting to MQTT broker at %s:%s with client ID %s...",
+                 MQTT_BROKER_HOST, MQTT_BROKER_PORT, self.client_id)
         try:
             self.client.connect_async(MQTT_BROKER_HOST, MQTT_BROKER_PORT, MQTT_KEEPALIVE_SECONDS)
             self.client.loop_start()
@@ -125,6 +140,7 @@ class EdgePublisher:
         except KeyboardInterrupt:
             LOG.info("Edge publisher stopped by user.")
         finally:
+            self.stopping.set()
             if self.connected.is_set():
                 self.client.publish(topic(ZONE_ID, "status"), "OFFLINE", qos=MQTT_QOS,
                                     retain=True).wait_for_publish(timeout=2)

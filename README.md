@@ -298,12 +298,27 @@ score and level. Fog rejects empty/invalid JSON, missing fields, unsupported
 schemas, and invalid sequences without stopping. Duplicate identity is
 `device_id + sequence_number`.
 
+MQTT component client IDs are explicit and different:
+
+```text
+Edge Publisher : marine-edge-coastal-node-01
+Fog Receiver   : marine-fog-node-01
+```
+
+Run only one Edge Publisher and one Fog Receiver for this single-node
+prototype. Mosquitto disconnects an older connection when a second process uses
+the same client ID. Repeated `broker unavailable` / `RECONNECTED` messages every
+1–2 seconds usually mean the same Edge or Fog command is running in two
+terminals—not that the healthy broker is unavailable.
+
 Configuration is centralized in `config.py`. Optional local overrides:
 
 ```powershell
 $env:MARINE_MQTT_HOST = "localhost"
 $env:MARINE_MQTT_PORT = "1883"
 $env:MARINE_EDGE_INTERVAL = "3"
+$env:MARINE_EDGE_CLIENT_ID = "marine-edge-coastal-node-01"
+$env:MARINE_FOG_CLIENT_ID = "marine-fog-node-01"
 ```
 
 Never put usernames, passwords, or tokens in source control.
@@ -324,9 +339,10 @@ schemas/sequences, duplicates, queue ordering/cleanup, and acknowledgements.
 Verified result:
 
 ```text
-20 passed
+35 passed
 Phase 1 tests: 11
-Phase 2 tests: 9
+Phase 2 tests: 11
+Phase 3 tests: 13
 ```
 
 ## Manual Phase 2 verification results
@@ -410,6 +426,18 @@ Chart.js is loaded from the jsDelivr CDN; charts require internet access to
 load that frontend library, while cards, tables, APIs, and stored data remain
 local.
 
+## Terminal 5 — Automated testing
+
+Testing can run in a separate terminal while the operating terminals are open:
+
+```powershell
+cd "C:\Users\Manya Kothari\Desktop\fog and edge computin\marine-edge-fog"
+..\.venv\Scripts\Activate.ps1
+python -m pytest
+```
+
+Current verified result: `35 passed`.
+
 ## Dashboard content and APIs
 
 - System status, latest timestamp, device, zone, and total stored readings.
@@ -446,9 +474,9 @@ Current suite breakdown:
 
 ```text
 Phase 1: 11 tests
-Phase 2:  9 tests
+Phase 2: 11 tests
 Phase 3: 13 tests
-Total:   33 tests
+Total:   35 tests
 ```
 
 Phase 3 tests use an isolated test database and never modify
@@ -500,6 +528,7 @@ service:
 | `database is locked` | Stop duplicate Fog/dashboard processes, wait a few seconds, then use one instance of each. SQLite already waits briefly for normal concurrent access. |
 | Dashboard opens but shows no data | Start Broker, Fog, and Edge in that order; confirm Fog logs `Stored event in SQLite database.` |
 | MQTT works but database does not update | Confirm the running Fog is this Phase 3 project and check its terminal for `DATABASE ERROR`. |
+| Continuous unavailable / RECONNECTED loop | Close every old Edge/Fog terminal with `Ctrl+C`, confirm no duplicate Python MQTT process remains, then start exactly one Fog and one Edge. Their startup logs must show different client IDs. |
 | Browser cannot connect to localhost | Confirm Terminal 4 prints the dashboard URL and open exactly `http://127.0.0.1:5000`. |
 | Port 5000 already in use | Stop the other Flask process, or set `$env:MARINE_DASHBOARD_PORT = "5001"` before running the dashboard and open that port. |
 | INVALID sensor shows `None` | This is expected only for the numeric risk score; the dashboard shows `BLOCKED` and `INVALID`, not a fabricated risk number. |
@@ -533,7 +562,7 @@ python -m mqtt.edge_publisher
 ```powershell
 git status
 git add .
-git commit -m "Complete Phase 2 MQTT Edge-Fog communication"
+git commit -m "Complete Phase 3 database and dashboard"
 git push
 ```
 

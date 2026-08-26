@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import logging
-import os
+import threading
 from typing import Any
 
 import paho.mqtt.client as mqtt
 
-from config import MQTT_BROKER_HOST, MQTT_BROKER_PORT, MQTT_KEEPALIVE_SECONDS, MQTT_QOS
+from config import (
+    FOG_MQTT_CLIENT_ID, MQTT_BROKER_HOST, MQTT_BROKER_PORT,
+    MQTT_KEEPALIVE_SECONDS, MQTT_QOS, MQTT_RECONNECT_MAX_SECONDS,
+    MQTT_RECONNECT_MIN_SECONDS,
+)
 from database import MarineDatabase
 from mqtt.message_utils import (
     DuplicateDetector, build_ack, parse_sensor_message, serialize_message, topic,
@@ -19,18 +23,20 @@ LOG = logging.getLogger("fog_receiver")
 
 class FogReceiver:
     def __init__(self, database: MarineDatabase | None = None,
-                 client_id: str | None = None) -> None:
+                 client_id: str = FOG_MQTT_CLIENT_ID) -> None:
         self.detector = DuplicateDetector()
         self.database = database or MarineDatabase()
-        # A process-specific default avoids MQTT client-ID collisions when an
-        # earlier Fog terminal is still running during local development.
-        resolved_client_id = client_id or f"marine-fog-node-{os.getpid()}"
+        self.client_id = client_id
+        self.stopping = threading.Event()
         self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2,
-                                  client_id=resolved_client_id)
+                                  client_id=self.client_id)
         self.client.on_connect = self._on_connect
         self.client.on_disconnect = self._on_disconnect
         self.client.on_message = self._on_message
-        self.client.reconnect_delay_set(min_delay=1, max_delay=30)
+        self.client.reconnect_delay_set(
+            min_delay=MQTT_RECONNECT_MIN_SECONDS,
+            max_delay=MQTT_RECONNECT_MAX_SECONDS,
+        )
 
     def _on_connect(self, client: mqtt.Client, userdata: Any, flags: Any,
                     reason_code: Any, properties: Any) -> None:
@@ -43,8 +49,14 @@ class FogReceiver:
 
     def _on_disconnect(self, client: mqtt.Client, userdata: Any,
                        disconnect_flags: Any, reason_code: Any, properties: Any) -> None:
-        if reason_code != 0:
-            LOG.warning("MQTT connection lost (%s). Client will retry.", reason_code)
+        if self.stopping.is_set():
+            LOG.info("Disconnected from MQTT broker (intentional shutdown).")
+        elif reason_code != 0:
+            LOG.warning(
+                "Unexpected MQTT disconnect (%s). Check broker health and ensure "
+                "client ID %s is not running in another Fog terminal. Paho will "
+                "retry with bounded delay.", reason_code, self.client_id,
+            )
         else:
             LOG.info("Disconnected from MQTT broker.")
 
@@ -96,13 +108,15 @@ class FogReceiver:
         print("========================================")
 
     def run(self) -> None:
-        LOG.info("Connecting to MQTT broker at %s:%s...", MQTT_BROKER_HOST, MQTT_BROKER_PORT)
+        LOG.info("Connecting to MQTT broker at %s:%s with client ID %s...",
+                 MQTT_BROKER_HOST, MQTT_BROKER_PORT, self.client_id)
         try:
             self.client.connect_async(MQTT_BROKER_HOST, MQTT_BROKER_PORT, MQTT_KEEPALIVE_SECONDS)
             self.client.loop_forever(retry_first_connection=True)
         except KeyboardInterrupt:
             LOG.info("Fog receiver stopped by user.")
         finally:
+            self.stopping.set()
             self.client.disconnect()
 
 

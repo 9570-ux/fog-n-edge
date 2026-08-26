@@ -1,10 +1,14 @@
 """Broker-independent Phase 2 unit tests."""
 
 import json
+import logging
 from pathlib import Path
 
 import pytest
 
+from config import EDGE_MQTT_CLIENT_ID, FOG_MQTT_CLIENT_ID
+from mqtt.edge_publisher import EdgePublisher
+from mqtt.fog_receiver import FogReceiver
 from mqtt.message_utils import (
     DuplicateDetector, OfflineQueue, build_ack, build_sensor_message, parse_ack,
     parse_sensor_message, serialize_message, topic,
@@ -88,3 +92,36 @@ def test_acknowledgement_round_trip():
     message = sample_message()
     acknowledgement = build_ack(message)
     assert parse_ack(json.dumps(acknowledgement)) == acknowledgement
+
+
+def test_edge_and_fog_use_explicit_unique_client_ids():
+    class FakeDatabase:
+        pass
+    class FakeQueue:
+        @staticmethod
+        def read_all():
+            return []
+
+    edge = EdgePublisher(queue=FakeQueue())
+    fog = FogReceiver(FakeDatabase())
+    assert EDGE_MQTT_CLIENT_ID == "marine-edge-coastal-node-01"
+    assert FOG_MQTT_CLIENT_ID == "marine-fog-node-01"
+    assert edge.client_id != fog.client_id
+    assert edge.client._client_id.decode() == EDGE_MQTT_CLIENT_ID
+    assert fog.client._client_id.decode() == FOG_MQTT_CLIENT_ID
+
+
+def test_intentional_disconnect_is_not_reported_as_broker_failure(caplog):
+    caplog.set_level(logging.INFO)
+    class FakeQueue:
+        @staticmethod
+        def read_all():
+            return []
+
+    publisher = EdgePublisher(client_id="test-edge-shutdown", queue=FakeQueue())
+    publisher.connected.set()
+    publisher.stopping.set()
+    publisher._on_disconnect(publisher.client, None, None, 128, None)
+    assert publisher.connected.is_set() is False
+    assert "broker unavailable" not in caplog.text.lower()
+    assert "intentional shutdown" in caplog.text.lower()
