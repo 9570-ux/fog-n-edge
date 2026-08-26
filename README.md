@@ -16,7 +16,7 @@ visualizes them locally.
 | Phase 1 — Sensor Simulation & Edge Risk | ✅ Completed |
 | Phase 2 — MQTT Edge-Fog Communication | ✅ Completed |
 | Phase 3 — Database & Dashboard | ✅ Completed |
-| Phase 4 — Decision / Simulated Sampling Logic | ✅ Completed |
+| Phase 4 — Decision & Automated Sampling Logic | ✅ Completed |
 | Phase 5 — ESP32 Hardware Integration | ⏳ Pending |
 | Phase 6 — Pump & Alert Integration | ⏳ Pending |
 | Phase 7 — AI Model | ⏳ Pending |
@@ -364,11 +364,11 @@ schemas/sequences, duplicates, queue ordering/cleanup, and acknowledgements.
 Verified result:
 
 ```text
-56 passed
+57 passed
 Phase 1 tests: 11
 Phase 2 tests: 11
 Phase 3 tests: 13
-Phase 4 tests: 21
+Phase 4 tests: 22
 ```
 
 ## Manual Phase 2 verification results
@@ -590,6 +590,24 @@ Phase 4 is still a software-only prototype. Fog converts every validated risk
 result into a traceable decision and stores the event, alert, decision, and any
 new sample request in one SQLite transaction before acknowledging Edge.
 
+```text
+Sensor Event
+    ↓
+Risk
+    ↓
+Decision Engine
+    ↓
+MONITOR / RETEST / SENSOR_MAINTENANCE / COLLECT_SAMPLE
+    ↓
+Decision Database
+    ↓
+Sample ID if required
+    ↓
+MQTT Sampling Command
+    ↓
+Dashboard
+```
+
 | Risk result | Decision | Sample request |
 |---|---|---|
 | LOW | `MONITOR` | No |
@@ -618,18 +636,21 @@ If `netstat -ano | findstr :1883` does not show `LISTENING`:
 ## Terminal 2 — Fog decision receiver
 
 ```powershell
+cd "C:\Users\Manya Kothari\Desktop\fog and edge computin\marine-edge-fog"
 python -m mqtt.fog_receiver
 ```
 
 ## Terminal 3 — Edge publisher
 
 ```powershell
+cd "C:\Users\Manya Kothari\Desktop\fog and edge computin\marine-edge-fog"
 python -m mqtt.edge_publisher
 ```
 
 ## Terminal 4 — Dashboard
 
 ```powershell
+cd "C:\Users\Manya Kothari\Desktop\fog and edge computin\marine-edge-fog"
 python -m dashboard.app
 ```
 
@@ -652,7 +673,10 @@ Edge event -> Fog atomic storage -> decision/sample IDs
 ```
 
 This receiver only prints and acknowledges the command. It does not control a
-pump, collect seawater, detect toxins, or submit a laboratory sample.
+pump, collect seawater, detect toxins, or submit a laboratory sample. Sampling
+is simulated throughout Phase 4. HIGH/CRITICAL create verification sample
+requests only; they do not confirm toxin presence, and accredited laboratory
+confirmation is still required.
 
 Manual Phase 4 verification completed with Mosquitto: a controlled HIGH event
 created linked decision/sample IDs, Fog published the command, the simulator
@@ -661,10 +685,18 @@ the persisted result successfully.
 
 Phase 4 read-only APIs:
 
-```text
-GET /api/decision/latest
-GET /api/decisions?limit=50
-GET /api/samples?limit=100
+```powershell
+$result = Invoke-RestMethod "http://127.0.0.1:5000/api/decision/latest"
+$result.decision | Format-List
+
+Invoke-RestMethod "http://127.0.0.1:5000/api/decisions"
+Invoke-RestMethod "http://127.0.0.1:5000/api/samples"
+```
+
+Database diagnostics:
+
+```powershell
+python -m database.diagnostics
 ```
 
 Optional local configuration:
@@ -675,8 +707,13 @@ $env:MARINE_SAMPLING_DURATION = "5"
 $env:MARINE_SAMPLING_CLIENT_ID = "marine-sampling-simulator-01"
 ```
 
-Run all automated tests separately with `python -m pytest`. Current verified
-result: `56 passed` (`11 + 11 + 13 + 21` across Phases 1–4).
+Run all automated tests separately:
+
+```powershell
+python -m pytest
+```
+
+Current verified result: `57 passed` (`11 + 11 + 13 + 22` across Phases 1–4).
 
 ## Basic Git commands
 

@@ -117,6 +117,16 @@ def test_low_reset_allows_new_high_sample_even_inside_cooldown(database):
     assert len(database.samples()) == 2
 
 
+def test_decision_and_sample_ids_are_unique(database):
+    process(database, message("HIGH", 1))
+    process(database, message("LOW", 2))
+    process(database, message("CRITICAL", 3))
+    decision_ids = [item["decision_id"] for item in database.decisions()]
+    sample_ids = [item["sample_id"] for item in database.samples()]
+    assert len(decision_ids) == len(set(decision_ids)) == 3
+    assert len(sample_ids) == len(set(sample_ids)) == 2
+
+
 def test_duplicate_event_creates_no_duplicate_decision_or_sample(database):
     event = message("CRITICAL")
     first = process(database, event)
