@@ -1,697 +1,544 @@
-# AI-Enabled Edge-Fog Marine HAB Early-Warning System
+# AI-Enabled Edge–Fog Early-Warning System for Marine Algal Toxin Risk
 
-Software prototype for a B.Tech project that simulates marine measurements,
-checks sensor quality, estimates preliminary environmental HAB risk at an Edge
-node, delivers traceable events to a Fog node through MQTT, and stores and
-visualizes them locally.
+Software-only final-year B.Tech project for simulated marine monitoring, Edge validation and risk scoring, MQTT communication, Fog processing, SQLite storage, a Flask dashboard, decision support, and virtual sampling.
 
-> **Safety limitation:** This prototype predicts environmental HAB risk only.
-> It does not directly detect toxins, identify toxin-producing algal strains, or
-> certify seafood safety. High-risk results require laboratory confirmation.
+> **Scientific limitation:** This software prototype predicts environmental HAB/toxin risk from simulated or dataset-based marine conditions. It does not directly detect marine toxins or certify seafood safety. High-risk results require accredited laboratory confirmation.
 
-## Project progress
+No physical sensor, ESP32, probe, pump, relay, camera, or other hardware is required for the completed Phase 1–4 demonstration.
 
-| Phase | Status |
-|---|---|
-| Phase 1 — Sensor Simulation & Edge Risk | ✅ Completed |
-| Phase 2 — MQTT Edge-Fog Communication | ✅ Completed |
-| Phase 3 — Database & Dashboard | ✅ Completed |
-| Phase 4 — Decision & Automated Sampling Logic | ✅ Completed |
-| Phase 5 — Adaptive Virtual Sampling | **Completed (software-only)** |
-| Phase 6 — Pump & Alert Integration | ⏳ Pending |
-| Phase 7 — AI Model | ⏳ Pending |
-| Phase 8 — Final Integration & Testing | ⏳ Pending |
+## Contents
 
-Phase 1 remains independently runnable. Phase 2 is software-only on one Windows
-laptop. Phase 3 adds local SQLite persistence and a Flask dashboard. Phase 4
-adds deterministic Fog decisions, persistent sample requests, cooldown/reset
-protection, and an MQTT sampling-command simulator. ESP32, physical sensors,
-real pumps, laboratory integration, and machine learning remain future work.
+- [Problem and objectives](#problem-and-objectives)
+- [Project status](#project-status)
+- [Architecture](#architecture)
+- [Prerequisites](#prerequisites)
+- [Windows installation](#windows-installation)
+- [Configuration](#configuration)
+- [Project structure](#project-structure)
+- [Phase 1](#phase-1--simulation-validation-and-edge-risk)
+- [Phase 2](#phase-2--mqtt-edgefog-communication)
+- [Phase 3](#phase-3--database-and-dashboard)
+- [Phase 4](#phase-4--decision-and-virtual-sampling)
+- [Complete demonstration](#complete-end-to-end-demonstration)
+- [API reference](#api-reference)
+- [Testing](#testing)
+- [Troubleshooting](#troubleshooting)
+- [Research novelty](#research-novelty)
+
+## Problem and objectives
+
+Harmful algal blooms (HABs) can produce toxins that accumulate in seafood. Laboratory testing remains essential, but is not continuous. This project demonstrates an early-warning pipeline that:
+
+- simulates marine environmental readings;
+- detects missing, impossible, stuck, and suddenly changing values;
+- estimates risk locally at an Edge node;
+- transfers events reliably through MQTT;
+- queues events during a broker outage and replays them;
+- stores readings, alerts, decisions, and virtual samples;
+- provides current and historical information through a dashboard;
+- recommends monitoring, retesting, maintenance, or sample collection.
+
+## Project status
+
+| Phase | Scope | Status |
+|---|---|---|
+| Phase 1 | Simulation, validation, and Edge risk | **Completed** |
+| Phase 2 | MQTT Edge publisher, Fog receiver, ACK, and offline queue | **Completed** |
+| Phase 3 | SQLite, alerts, Flask dashboard, APIs, and graphs | **Completed** |
+| Phase 4 | Decision engine, cooldown, and virtual sampling | **Completed** |
+| Phase 5 | Adaptive Virtual Sampling | **Completed (software-only)** |
+| Phase 6 | AI Prediction, Uncertainty and Explainability | **Pending** |
+| Phase 7 | Adaptive Edge–Fog Task Allocation | **Pending** |
+| Phase 8 | Role-Based Dashboard, Evaluation and Final Testing | **Pending** |
+
+Phases 1–4 form the completed runtime guide below. Phase 5 is completed for its software-only adaptive virtual sampling scope, documented in the Phase 5 section. Phases 6–8 remain Pending.
+
+Planned work will add multiple coastal zones, explainable and uncertainty-aware AI, adaptive Edge/Fog/Cloud placement, species-wise recommendations, role-based views, and final evaluation. These are proposals, not current features.
 
 ## Architecture
 
-```text
-Phase 1 simulator -> validation -> Edge risk engine
-                                      |
-                                      v
-                              Edge MQTT publisher
-                                      |
-                           Mosquitto broker (QoS 1)
-                                      |
-                                      v
-                               Fog MQTT receiver
-                                      |
-                         validation + duplicate check
-                                      |
-                      decision + cooldown/reset rules
-                              |
-                SQLite event/alert/decision/sample transaction
-                       |              |              |
-                application ACK  Flask dashboard  sampling command
-                                                     |
-                                             simulated receiver ACK
-```
+~~~mermaid
+flowchart LR
+    A[Marine Simulator] --> B[Validation Engine]
+    B --> C[Edge Risk Engine]
+    C --> D[Edge MQTT Publisher]
+    D -->|Sensor event, QoS 1| E[Mosquitto]
+    E --> F[Fog Receiver]
+    F --> G[(SQLite)]
+    F --> H[Decision Engine]
+    H --> G
+    H --> I[Sampling Manager]
+    I -->|Virtual command| E
+    E --> J[Software Sampling Receiver]
+    J -->|Command ACK| E
+    F -->|Event ACK| E
+    G --> K[Flask Dashboard and APIs]
+    D -. Broker offline .-> L[JSONL Offline Queue]
+    L -. Replay .-> D
+~~~
 
-Edge saves every event to `data/offline_queue.jsonl` before publishing and
-removes it only after Fog returns a `RECEIVED` or `DUPLICATE` acknowledgement.
-This is the Phase 2 store-and-forward mechanism when the broker is unavailable.
-In simple terms, Phase 1 creates and checks the marine reading; Edge sends it,
-Mosquitto carries it, and Fog validates and confirms receipt.
+The Edge, Fog, dashboard, and sampling receiver are separate software processes. The dashboard reads the same canonical SQLite database written by Fog.
 
-When MQTT is unavailable:
+## Prerequisites
 
-```text
-Event generated -> MQTT unavailable -> Event stored in offline queue
-```
+Install:
 
-When the connection returns:
+1. [Python for Windows](https://www.python.org/downloads/windows/) — Python 3.10+
+2. [Git for Windows](https://git-scm.com/download/win)
+3. [Eclipse Mosquitto](https://mosquitto.org/download/) — broker and command-line tools
+4. Optional: [Visual Studio Code](https://code.visualstudio.com/download)
 
-```text
-Reconnect -> Queued events replayed -> Fog receives event
-          -> Fog acknowledgement -> Acknowledged event removed from queue
-```
+### Installation verification
+
+Use the official Windows installers. During Python installation select **Add python.exe to PATH**. Git can use its recommended defaults. Mosquitto may be installed as a Windows service. VS Code is optional; its Microsoft Python extension can select the project virtual environment.
+
+~~~powershell
+python --version
+python -m pip --version
+git --version
+& "C:\Program Files\mosquitto\mosquitto.exe" -h
+Get-Service mosquitto -ErrorAction SilentlyContinue
+netstat -ano | findstr :1883
+code --version
+~~~
+
+Success means Python 3.10+, pip, and Git print versions; Mosquitto prints help; and a running broker listens on port 1883. If a command is not recognized, reopen PowerShell after installation or add its installation folder to PATH. VS Code and its command are optional.
+
+SQLite needs no separate installation because Python includes it:
+
+~~~powershell
+python -c "import sqlite3; print(sqlite3.sqlite_version)"
+~~~
+
+Minimal Python packages:
+
+| Package | Purpose |
+|---|---|
+| paho-mqtt | MQTT communication |
+| Flask | Dashboard and REST APIs |
+| pytest | Automated tests |
+
+## Windows installation
+
+Clone the repository in PowerShell:
+
+~~~powershell
+cd "$HOME\Desktop"
+git clone https://github.com/9570-ux/fog-n-edge.git
+cd fog-n-edge
+~~~
+
+For this existing workspace, the real folder is:
+
+~~~powershell
+cd "C:\Users\Manya Kothari\Desktop\fog and edge computin\marine-edge-fog"
+~~~
+
+Do not use an invented path such as Manya Kothari remindersbies. PowerShell reports “Cannot find path” if the folder does not exist.
+
+Create the environment and install dependencies:
+
+~~~powershell
+python -m venv .venv
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+python -m pip list
+python -m pytest
+~~~
+
+If the environment already exists in the parent folder, activate it with:
+
+~~~powershell
+..\.venv\Scripts\Activate.ps1
+~~~
+
+## Configuration
+
+The defaults support a local demonstration:
+
+| Setting | Default |
+|---|---|
+| MQTT broker | localhost:1883 |
+| MQTT QoS | 1 |
+| Edge client ID | marine-edge-coastal-node-01 |
+| Fog client ID | marine-fog-node-01 |
+| Sampling client ID | marine-sampling-simulator-01 |
+| Device / zone | coastal-node-01 / zone-b |
+| Publish interval | 3 seconds |
+| Database | data/marine_monitoring.db |
+| Offline queue | data/offline_queue.jsonl |
+| Sampling cooldown | 900 seconds |
+| Dashboard | http://127.0.0.1:5000 |
+
+Example session overrides:
+
+~~~powershell
+$env:MARINE_MQTT_HOST = "localhost"
+$env:MARINE_MQTT_PORT = "1883"
+$env:MARINE_DEVICE_ID = "coastal-node-01"
+$env:MARINE_ZONE_ID = "zone-b"
+~~~
+
+All components must use compatible broker/topic settings. Client IDs must remain unique; duplicate IDs cause Mosquitto to disconnect the older client.
 
 ## Project structure
 
-```text
+~~~text
 marine-edge-fog/
-|-- app.py
-|-- config.py
-|-- pytest.ini
-|-- requirements.txt
-|-- README.md
-|-- simulator/
-|   `-- sensor_simulator.py
-|-- validation/
-|   `-- sensor_validator.py
-|-- risk/
-|   `-- edge_risk_engine.py
-|-- decision/
-|   |-- __init__.py
-|   |-- decision_engine.py
-|   `-- sampling_manager.py
-|-- mqtt/
-|   |-- __init__.py
-|   |-- message_utils.py
-|   |-- edge_publisher.py
-|   |-- fog_receiver.py
-|   `-- sampling_receiver.py
-|-- database/
-|   |-- __init__.py
-|   `-- db.py
-|-- dashboard/
-|   |-- __init__.py
-|   |-- app.py
-|   |-- templates/
-|   |   `-- index.html
-|   `-- static/
-|       |-- style.css
-|       `-- dashboard.js
-|-- data/
-|   `-- .gitkeep
-`-- tests/
-    |-- test_scenarios.py
-    |-- test_phase2_mqtt.py
-    |-- test_phase3_database_dashboard.py
-    `-- test_phase4_decision_sampling.py
-```
+├── app.py                  Interactive Phase 1 demonstration
+├── config.py               Shared settings and paths
+├── simulator/              Marine data simulation
+├── validation/             Data quality checks
+├── risk/                   Edge risk calculation
+├── edge/publisher.py       MQTT publisher and offline queue
+├── fog/receiver.py         Persistence, decisions, commands, ACKs
+├── messaging/              Topics and JSON message helpers
+├── storage/                SQLite repository and diagnostics
+├── decision/               Phase 4 rules
+├── sampling/               Manager and software receiver
+├── dashboard/              Flask app, templates, and assets
+├── tests/                  Automated test suite
+└── data/                   Git-ignored runtime database and queue
+~~~
 
-The runtime queue and SQLite database are generated automatically and ignored
-by Git.
+Experimental future-phase files, if present in a development checkout, are not required by the completed Phase 1–4 software demonstration.
 
-## Requirements and initial setup
+## Phase 1 — Simulation, validation and Edge risk
 
-- Windows 10/11
-- Python 3.10 or newer (Python 3)
-- Existing project virtual environment at `..\.venv`
-- `paho-mqtt` (installed through `requirements.txt`)
-- Flask (installed through `requirements.txt`)
-- Eclipse Mosquitto MQTT Broker for Windows
+Run:
 
-The working virtual environment is in the parent `fog and edge computin`
-folder. On a fresh computer, clone and set up with:
-
-```powershell
-cd "C:\Users\Manya Kothari\Desktop\fog and edge computin"
-git clone https://github.com/9570-ux/fog-n-edge.git marine-edge-fog
-cd "C:\Users\Manya Kothari\Desktop\fog and edge computin\marine-edge-fog"
-python -m venv ..\.venv
-..\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-```
-
-SQLite uses Python's standard library and initializes its tables automatically.
-There is no separate database setup command. The runtime database is created at
-the canonical absolute project location
-`C:\Users\Manya Kothari\Desktop\fog and edge computin\marine-edge-fog\data\marine_monitoring.db`
-when Fog or the dashboard first starts. The default no longer depends on the
-terminal's current working directory. Both Fog and Dashboard print this active
-path at startup.
-
-Inspect the active database without changing its contents:
-
-```powershell
-python -m database.diagnostics
-```
-
-This prints the canonical path, sensor-event, decision and sample counts, plus
-the latest decision.
-
-If script activation is blocked for the current PowerShell session:
-
-```powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-..\.venv\Scripts\Activate.ps1
-```
-
-This policy is temporary. You can instead call
-`..\.venv\Scripts\python.exe` in place of `python`.
-
-## Install Mosquitto on Windows
-
-Mosquitto is system software and is not installed by `requirements.txt`.
-The working Windows installation path is `C:\Program Files\Mosquitto`.
-
-1. Visit the official Eclipse Mosquitto website and open its Download page.
-2. Download the Windows 64-bit installer.
-3. Run it, keep the default components and default installation path.
-4. The Mosquitto Windows service may start automatically after installation.
-5. Open a new PowerShell and verify the executable:
-
-```powershell
-& "C:\Program Files\mosquitto\mosquitto.exe" -h
-```
-
-## Check whether the MQTT broker is running
-
-Before starting another broker, check port 1883:
-
-```powershell
-netstat -ano | findstr :1883
-```
-
-If the result contains `LISTENING`, an MQTT broker is already running and a
-separate broker terminal is not required. Otherwise, start it manually:
-
-```powershell
-& "C:\Program Files\Mosquitto\mosquitto.exe" -v
-```
-
-If this command reports `Only one usage of each socket address...`, the
-Mosquitto service or another broker instance is normally already using port
-1883. Do not start a second instance; use the broker that is already listening.
-
-# Running Phase 2
-
-## Phase 2 Quick Start
-
-Open three separate PowerShell terminals.
-
-### 1. Terminal 1 — Broker
-
-```powershell
-& "C:\Program Files\Mosquitto\mosquitto.exe" -v
-```
-
-Expected output includes `Opening ipv4 listen socket on port 1883`.
-If `netstat -ano | findstr :1883` already shows `LISTENING`, skip Terminal 1.
-
-### 2. Terminal 2 — Fog receiver
-
-```powershell
-cd "C:\Users\Manya Kothari\Desktop\fog and edge computin\marine-edge-fog"
-..\.venv\Scripts\Activate.ps1
-python -m mqtt.fog_receiver
-```
-
-Expected output:
-
-```text
-Connecting to MQTT broker at localhost:1883...
-Connected to MQTT broker. Subscribed to marine/+/sensors
-
-FOG NODE - MQTT EVENT RECEIVED
-Device          : coastal-node-01
-Zone            : zone-b
-Sequence        : 1
-Sensor Validity : VALID
-Edge Risk Level : LOW
-MQTT Status     : RECEIVED
-```
-
-### 3. Terminal 3 — Edge publisher
-
-```powershell
-cd "C:\Users\Manya Kothari\Desktop\fog and edge computin\marine-edge-fog"
-..\.venv\Scripts\Activate.ps1
-python -m mqtt.edge_publisher
-```
-
-Expected output includes:
-
-```text
-Connecting to MQTT broker at localhost:1883...
-Connected to MQTT broker (ONLINE).
-Published sequence 1 (awaiting Fog acknowledgement).
-Fog acknowledged sequence 1; removed from offline queue.
-```
-
-### 4. Observe messages
-
-Leave all terminals running. Sequence numbers increase 1, 2, 3, and so on,
-and Fog acknowledges each event.
-
-### 5. Test offline mode
-
-Press `Ctrl+C` in Terminal 1. Edge continues generating data and reports that
-events were safely queued in `data/offline_queue.jsonl`.
-
-### 6. Restart Broker
-
-```powershell
-& "C:\Program Files\Mosquitto\mosquitto.exe" -v
-```
-
-### 7. Verify synchronization
-
-Edge reports `RECONNECTED`, replays queued messages in sequence order, receives
-Fog acknowledgements, and removes acknowledged records. An empty queue file is
-normal.
-
-## Stopping the services
-
-Press `Ctrl+C` once in the Edge, Fog, and manually started Mosquitto terminals.
-A graceful shutdown returns each terminal to its PowerShell prompt without an
-unnecessary traceback. Then deactivate Python with:
-
-```powershell
-deactivate
-```
-
-## Phase 1 application
-
-The original interactive menu is unchanged:
-
-```powershell
-cd "C:\Users\Manya Kothari\Desktop\fog and edge computin\marine-edge-fog"
-..\.venv\Scripts\Activate.ps1
+~~~powershell
 python app.py
-```
+~~~
 
-It supports normal, medium, high/critical, invalid pH, low dissolved oxygen,
-high turbidity, missing sensor, stuck sensor, sudden change, and automatic
-simulation scenarios. Invalid sensor input blocks risk prediction.
+Choose from the actual interactive menu:
 
-## MQTT protocol
+| Choice | Scenario | Expected behavior |
+|---:|---|---|
+| 1 | Normal | Valid, normally LOW |
+| 2 | Medium Risk | MEDIUM |
+| 3 | High Risk | HIGH or CRITICAL |
+| 4 | Invalid pH | INVALID; prediction blocked |
+| 5 | Low Dissolved Oxygen | Increased risk |
+| 6 | High Turbidity | Increased risk |
+| 7 | Missing Sensor | INVALID; prediction blocked |
+| 8 | Stuck Sensor | Fourth repeated reading becomes invalid |
+| 9 | Sudden Sensor Change | Excessive change becomes invalid |
+| 10 | Automatic Random Simulation | Runs until Ctrl+C |
+| 0 | Exit | Stops the program |
 
-The reusable topic builder supports `zone-a`, `zone-b`, `zone-c`, and future
-single-level zone names.
+Validation checks required fields, numeric types, ranges, rate of change, and stuck values. Errors and significant warnings block prediction.
 
-| Topic | Purpose |
+Risk bands:
+
+- LOW: 0–24
+- MEDIUM: 25–49
+- HIGH: 50–79
+- CRITICAL: 80–100
+- INVALID: input quality failed
+
+Important: app.py is a local menu demonstration. It does not send its selected scenario to MQTT. Use the Edge Publisher for the live pipeline.
+
+## Phase 2 — MQTT Edge–Fog communication
+
+### Topics
+
+| Purpose | Topic |
 |---|---|
-| `marine/zone-b/sensors` | Complete event consumed by Fog |
-| `marine/zone-b/edge-risk` | Edge risk event for future consumers |
-| `marine/zone-b/status` | Retained ONLINE/OFFLINE/RECONNECTED state and LWT |
-| `marine/zone-b/commands` | Phase 4 simulated sample command from Fog |
-| `marine/zone-b/command-ack` | Phase 4 simulated receiver acknowledgement |
-| `marine/zone-b/ack` | Fog application acknowledgement |
+| Sensor event | marine/device-id/sensors |
+| Edge risk | marine/device-id/edge-risk |
+| Device status/LWT | marine/device-id/status |
+| Fog command | marine/device-id/commands |
+| Fog event ACK | marine/device-id/ack |
+| Sampling command ACK | marine/device-id/command-ack |
 
-Sensor events use MQTT QoS 1. JSON includes schema version, device, zone,
-timestamp, sequence, five readings, sensor validity and score, plus Edge risk
-score and level. Fog rejects empty/invalid JSON, missing fields, unsupported
-schemas, and invalid sequences without stopping. Duplicate identity is
-`device_id + sequence_number`.
+Messages use JSON and carry the schema version, device, zone, sequence, readings, validation, and risk data. Sensor publication uses QoS 1.
 
-MQTT component client IDs are explicit and different:
+### Start Mosquitto
 
-```text
-Edge Publisher : marine-edge-coastal-node-01
-Fog Receiver   : marine-fog-node-01
-```
+If installed as a service:
 
-Run only one Edge Publisher and one Fog Receiver for this single-node
-prototype. Mosquitto disconnects an older connection when a second process uses
-the same client ID. Repeated `broker unavailable` / `RECONNECTED` messages every
-1–2 seconds usually mean the same Edge or Fog command is running in two
-terminals—not that the healthy broker is unavailable.
-
-Configuration is centralized in `config.py`. Optional local overrides:
-
-```powershell
-$env:MARINE_MQTT_HOST = "localhost"
-$env:MARINE_MQTT_PORT = "1883"
-$env:MARINE_EDGE_INTERVAL = "3"
-$env:MARINE_EDGE_CLIENT_ID = "marine-edge-coastal-node-01"
-$env:MARINE_FOG_CLIENT_ID = "marine-fog-node-01"
-```
-
-Never put usernames, passwords, or tokens in source control.
-
-## Automated tests
-
-Tests do not require a running broker:
-
-```powershell
-cd "C:\Users\Manya Kothari\Desktop\fog and edge computin\marine-edge-fog"
-..\.venv\Scripts\Activate.ps1
-python -m pytest
-```
-
-They cover all Phase 1 scenarios plus topics, JSON, malformed/missing data,
-schemas/sequences, duplicates, queue ordering/cleanup, and acknowledgements.
-
-Verified result:
-
-```text
-57 passed
-Phase 1 tests: 11
-Phase 2 tests: 11
-Phase 3 tests: 13
-Phase 4 tests: 22
-```
-
-## Manual Phase 2 verification results
-
-The following behavior has been manually verified with Mosquitto:
-
-- Fog receiver and Edge publisher connected successfully.
-- Events arrived in sequential order.
-- LOW, MEDIUM, CRITICAL, and INVALID sensor messages were received.
-- Fog acknowledgements reached Edge.
-- An event queued while MQTT was unavailable was replayed after reconnect.
-- Acknowledged events were removed from `data/offline_queue.jsonl`.
-
-## Optional malformed-message test
-
-With Broker and Fog running:
-
-```powershell
-& "C:\Program Files\Mosquitto\mosquitto_pub.exe" -h localhost -t "marine/zone-b/sensors" -m "{bad-json"
-```
-
-Fog logs `INVALID MQTT MESSAGE` and continues. Automated tests also cover
-missing fields and duplicate events.
-
-# Running Phase 3
-
-Phase 3 keeps the Phase 1 and Phase 2 commands and adds automatic SQLite
-storage plus a fourth dashboard terminal. Fog stores each new event before
-sending its acknowledgement. Database uniqueness on `device_id +
-sequence_number` prevents duplicates even after Fog restarts.
-
-## Terminal 1 — MQTT Broker (optional when service is running)
-
-```powershell
+~~~powershell
+Get-Service mosquitto
+Start-Service mosquitto
 netstat -ano | findstr :1883
-```
+~~~
 
-If no `LISTENING` result appears:
+Otherwise run it in its own terminal:
 
-```powershell
-& "C:\Program Files\Mosquitto\mosquitto.exe" -v
-```
+~~~powershell
+& "C:\Program Files\mosquitto\mosquitto.exe" -v
+~~~
 
-## Terminal 2 — Fog Receiver + SQLite storage
+Keep a manually started broker terminal open and stop it with Ctrl+C. Stop the service from an Administrator PowerShell with Stop-Service mosquitto.
 
-```powershell
-cd "C:\Users\Manya Kothari\Desktop\fog and edge computin\marine-edge-fog"
-..\.venv\Scripts\Activate.ps1
-python -m mqtt.fog_receiver
-```
+### Start Fog and Edge
 
-The database and tables initialize automatically at
-`data/marine_monitoring.db`. A new event produces `Stored event in SQLite
-database.` before the normal Fog output and acknowledgement.
+Fog terminal:
 
-## Terminal 3 — Edge Publisher
+~~~powershell
+python -m fog.receiver
+~~~
 
-```powershell
-cd "C:\Users\Manya Kothari\Desktop\fog and edge computin\marine-edge-fog"
-..\.venv\Scripts\Activate.ps1
-python -m mqtt.edge_publisher
-```
+Edge terminal:
 
-## Terminal 4 — Dashboard
+~~~powershell
+python -m edge.publisher
+~~~
 
-```powershell
-cd "C:\Users\Manya Kothari\Desktop\fog and edge computin\marine-edge-fog"
-..\.venv\Scripts\Activate.ps1
+Healthy Edge output should remain stable:
+
+~~~text
+Connected to MQTT broker (ONLINE)
+Published sequence ...
+Fog acknowledged sequence ...
+Published sequence ...
+Fog acknowledged sequence ...
+~~~
+
+It should not continuously alternate between broker unavailable and RECONNECTED while Mosquitto is healthy.
+
+### Offline queue
+
+The Edge records outgoing events in data/offline_queue.jsonl. A Fog ACK removes the acknowledged item. During an outage, items remain queued; after reconnection, they replay in sequence. Database uniqueness on device ID and sequence number prevents duplicate records, decisions, and samples.
+
+## Phase 3 — Database and dashboard
+
+The canonical database is data/marine_monitoring.db and is created automatically. Main tables:
+
+| Table | Purpose |
+|---|---|
+| sensor_events | Readings, validation, risk, timestamps |
+| alerts | Medium, high, critical, and invalid alerts |
+| decisions | One Phase 4 action per accepted event |
+| samples | Traceable virtual samples |
+
+Start the dashboard:
+
+~~~powershell
 python -m dashboard.app
-```
+~~~
 
-Expected output:
+Open [http://127.0.0.1:5000](http://127.0.0.1:5000).
 
-```text
-Dashboard running at http://127.0.0.1:5000
-```
+It shows current readings and risk, status, latest decision, history, charts, alerts, and samples with automatic refresh. Chart.js is loaded from a CDN; the APIs and numeric dashboard data can still work if that chart resource is unavailable.
 
-Open `http://127.0.0.1:5000` in a browser. The page polls its read-only APIs
-every five seconds, so new database events appear without restarting Flask.
-Chart.js is loaded from the jsDelivr CDN; charts require internet access to
-load that frontend library, while cards, tables, APIs, and stored data remain
-local.
+Inspect storage:
 
-## Terminal 5 — Automated testing
+~~~powershell
+python -m storage.diagnostics
+~~~
 
-Testing can run in a separate terminal while the operating terminals are open:
+## Phase 4 — Decision and virtual sampling
 
-```powershell
-cd "C:\Users\Manya Kothari\Desktop\fog and edge computin\marine-edge-fog"
-..\.venv\Scripts\Activate.ps1
+Fog passes every new non-duplicate stored sensor event to the Decision Engine:
+
+| Event/risk | Action | Sampling |
+|---|---|---|
+| LOW | MONITOR | No |
+| MEDIUM | RETEST | No |
+| HIGH | COLLECT_SAMPLE | Yes, subject to cooldown |
+| CRITICAL | COLLECT_SAMPLE | Yes, subject to cooldown |
+| Invalid | SENSOR_MAINTENANCE | No |
+
+For HIGH or CRITICAL, the Sampling Manager creates a SAMPLE-... record and publishes a command. The receiver below is only a software simulator and controls no physical equipment:
+
+~~~powershell
+python -m sampling.receiver
+~~~
+
+The cooldown suppresses redundant samples during one continuing hazard. LOW, MEDIUM, or invalid input resets that hazard state. Duplicate MQTT events create no duplicate decision or sample.
+
+## Complete end-to-end demonstration
+
+Activate the virtual environment and enter the repository folder in every terminal.
+
+### Terminal 1 — Mosquitto
+
+~~~powershell
+& "C:\Program Files\mosquitto\mosquitto.exe" -v
+~~~
+
+If the Mosquitto service is already running, do not start a second broker on port 1883.
+
+### Terminal 2 — Fog Receiver
+
+~~~powershell
+python -m fog.receiver
+~~~
+
+### Terminal 3 — Edge Publisher
+
+~~~powershell
+python -m edge.publisher
+~~~
+
+### Terminal 4 — Dashboard
+
+~~~powershell
+python -m dashboard.app
+~~~
+
+Open [http://127.0.0.1:5000](http://127.0.0.1:5000).
+
+### Terminal 5 — Software Sampling Receiver
+
+~~~powershell
+python -m sampling.receiver
+~~~
+
+### Terminal 6 — Tests and API checks
+
+~~~powershell
 python -m pytest
-```
+Invoke-RestMethod http://127.0.0.1:5000/api/status
+Invoke-RestMethod http://127.0.0.1:5000/api/latest
+Invoke-RestMethod http://127.0.0.1:5000/api/decision/latest
+~~~
 
-Current verified result: `35 passed`.
+The live Edge Publisher uses weighted random simulation, so its next risk level is not deterministic. Automated tests verify every exact decision mapping.
 
-## Dashboard content and APIs
+## API reference
 
-- System status, latest timestamp, device, zone, and total stored readings.
-- Five latest sensor cards and a prominent LOW/MEDIUM/HIGH/CRITICAL/INVALID
-  screening result.
-- Database-backed history graphs with latest 20, 50, or 100 readings.
-- Recent-events table and filterable persistent alerts.
-- Empty database displays `Waiting for sensor data...` safely.
-- INVALID events remain traceable, show `BLOCKED` instead of a fake score, and
-  create an `INVALID SENSOR` alert.
+| Method | Endpoint | Result |
+|---|---|---|
+| GET | /api/status | Database/Fog status and counts |
+| GET | /api/latest | Latest sensor event |
+| GET | /api/history?limit=20 | History; supported limits: 20, 50, 100 |
+| GET | /api/alerts | Alert history |
+| GET | /api/alerts?level=HIGH | Alerts filtered by level |
+| GET | /api/decision/latest | Latest persisted decision |
+| GET | /api/decisions?limit=50 | Decision history |
+| GET | /api/samples?limit=100 | Virtual sample history |
 
-Read-only endpoints:
+Examples:
 
-```text
-GET /api/latest
-GET /api/history?limit=20
-GET /api/alerts?level=CRITICAL
-GET /api/status
-```
+~~~powershell
+Invoke-RestMethod http://127.0.0.1:5000/api/history?limit=20
+Invoke-RestMethod http://127.0.0.1:5000/api/alerts
+Invoke-RestMethod http://127.0.0.1:5000/api/decisions?limit=50
+Invoke-RestMethod http://127.0.0.1:5000/api/samples?limit=100
+~~~
 
-Alert records are created for MEDIUM, HIGH, CRITICAL, and INVALID results. LOW
-readings are stored but do not create an alert. These are environmental
-screening alerts, not confirmation of toxin contamination.
+If the latest-decision API has no record, ensure Fog has received at least one new, non-duplicate event.
 
-## Phase 3 automated verification
+## Testing
 
-```powershell
-cd "C:\Users\Manya Kothari\Desktop\fog and edge computin\marine-edge-fog"
-..\.venv\Scripts\Activate.ps1
+Run everything:
+
+~~~powershell
 python -m pytest
-```
+~~~
 
-Current suite breakdown:
+Phase 1–4 tests cover scenarios, validation, risk, message schema, client IDs, topics, ACKs, queue replay, SQLite persistence, duplicates, alerts, dashboard APIs, Fog-to-decision integration, action mapping, cooldown, commands, and sample APIs.
 
-```text
-Phase 1: 11 tests
-Phase 2: 11 tests
-Phase 3: 13 tests
-Total:   35 tests
-```
+Run individual groups:
 
-Phase 3 tests use an isolated test database and never modify
-`data/marine_monitoring.db`.
+~~~powershell
+python -m pytest tests/test_scenarios.py
+python -m pytest tests/test_phase2_mqtt.py
+python -m pytest tests/test_phase3_database_dashboard.py
+python -m pytest tests/test_phase4_decision_sampling.py
+python -m pytest -v
+~~~
 
-## Phase 3 manual verification results
+The exact total can increase as regression tests are added. The authoritative result is the count printed by the current checkout, and completion requires zero failures.
 
-The complete local flow was verified on Windows with the installed Mosquitto
-service:
-
-- Fog connected, stored sequential MQTT events, then acknowledged Edge.
-- LOW, MEDIUM, CRITICAL, and INVALID events were persisted and displayed.
-- INVALID displayed `BLOCKED` with no fabricated numeric risk score.
-- Publishing the same device/sequence twice created only one database event.
-- MEDIUM, CRITICAL, and INVALID SENSOR alerts appeared; filtering worked.
-- Dashboard cards, recent table, 20/50 history controls, both database-backed
-  charts, and all four read-only APIs worked without restarting Flask.
-- After stopping and restarting the dashboard, 51 stored readings remained,
-  confirming SQLite persistence.
-- Empty-database behavior is covered by the automated dashboard/API test and
-  displays `Waiting for sensor data...`.
-
-## Normal / later Phase 3 run
-
-1. Confirm port 1883 is listening.
-2. Run `python -m mqtt.fog_receiver` in the activated project environment.
-3. Run `python -m mqtt.edge_publisher` in another activated terminal.
-4. Run `python -m dashboard.app` in a fourth activated terminal.
-5. Open `http://127.0.0.1:5000`; stop services with `Ctrl+C`.
+A pass appears as a dot or PASSED. A failure appears as FAILED with a traceback. The suite uses controlled MQTT test doubles and temporary data, so it does not require a live broker and does not reset the historical runtime database.
 
 ## Troubleshooting
 
-| Problem | Solution |
-|---|---|
-| `mosquitto` not recognized | Mosquitto is absent or not in PATH. Use `& "C:\Program Files\Mosquitto\mosquitto.exe" -v` or install the official Eclipse Mosquitto Windows package. |
-| Connection refused / Edge cannot connect | Start Terminal 1 and confirm it listens on 1883; check environment host/port. |
-| Port 1883 already in use | Run `netstat -ano \| findstr :1883`. A Mosquitto Windows service may already be running; do not start a second broker. |
-| `No module named mqtt` | The terminal is in the parent folder. `cd "C:\Users\Manya Kothari\Desktop\fog and edge computin\marine-edge-fog"`, then run the module command again. |
-| `No module named paho` | Activate `..\.venv`, then run `python -m pip install paho-mqtt` or install all requirements. |
-| `pytest` not recognized | Use `python -m pytest`. If missing, run `python -m pip install pytest`. |
-| `requirements.txt` not found | Run `dir`, then enter the real project folder with `cd "C:\Users\Manya Kothari\Desktop\fog and edge computin\marine-edge-fog"`. |
-| Fog receives no messages | Start Broker, Fog, then Edge; verify all use the same host, port, and zone. |
-| Offline queue not clearing | Fog must be running to send ACKs. Wait for replay and check queue warnings; do not delete unacknowledged data. |
-| Wrong working directory | `Get-Location` must end in `marine-edge-fog` before `python -m mqtt...`. |
-| Virtual environment inactive | Run `..\.venv\Scripts\Activate.ps1`, or use `..\.venv\Scripts\python.exe`. |
-| Graceful shutdown / Ctrl+C | Press once and allow a few seconds for the current MQTT operation to close. |
-| `No module named flask` | Activate `..\.venv`, then run `python -m pip install -r requirements.txt`. |
-| Database file not created | Start Fog or dashboard from the project folder and confirm the `data` folder is writable. Initialization is automatic. |
-| `database is locked` | Stop duplicate Fog/dashboard processes, wait a few seconds, then use one instance of each. SQLite already waits briefly for normal concurrent access. |
-| Dashboard opens but shows no data | Start Broker, Fog, and Edge in that order; confirm Fog logs `Stored event in SQLite database.` |
-| MQTT works but database does not update | Confirm the running Fog is this Phase 3 project and check its terminal for `DATABASE ERROR`. |
-| Continuous unavailable / RECONNECTED loop | Close every old Edge/Fog terminal with `Ctrl+C`, confirm no duplicate Python MQTT process remains, then start exactly one Fog and one Edge. Their startup logs must show different client IDs. |
-| Browser cannot connect to localhost | Confirm Terminal 4 prints the dashboard URL and open exactly `http://127.0.0.1:5000`. |
-| Port 5000 already in use | Stop the other Flask process, or set `$env:MARINE_DASHBOARD_PORT = "5001"` before running the dashboard and open that port. |
-| INVALID sensor shows `None` | This is expected only for the numeric risk score; the dashboard shows `BLOCKED` and `INVALID`, not a fabricated risk number. |
-| Charts have no data | Generate events through Edge/Fog. Also ensure internet is available for the Chart.js CDN. |
-| `/api/decision/latest` returns `null` while sensor history grows | The usual cause is a Fog process started before Phase 4 code was loaded, or Fog/Dashboard using different relative database paths. Stop the old Fog, Edge, and Dashboard terminals with `Ctrl+C`; start the current Fog first, then Edge and Dashboard. Confirm Fog and Dashboard print the same canonical SQLite path. Wait for a new sequence—older Phase 3 rows are retained but are not silently backfilled into decisions. Run `python -m database.diagnostics` to confirm counts. |
+### Cannot find the project path
 
-## Quick start for later runs
+~~~powershell
+Get-ChildItem "$HOME\Desktop"
+Get-ChildItem "C:\Users\Manya Kothari\Desktop\fog and edge computin"
+~~~
 
-1. Check the broker: `netstat -ano | findstr :1883`.
-2. In the Fog terminal, enter the project, activate `..\.venv`, and run
-   `python -m mqtt.fog_receiver`.
-3. In the Edge terminal, enter the project, activate `..\.venv`, and run
-   `python -m mqtt.edge_publisher`.
-4. Observe events and acknowledgements; use `Ctrl+C` to stop.
+Copy the exact path and quote it because it contains spaces.
 
-```powershell
-cd "C:\Users\Manya Kothari\Desktop\fog and edge computin\marine-edge-fog"
-..\.venv\Scripts\Activate.ps1
-python -m mqtt.fog_receiver
-```
+### Script execution is disabled
 
-In a second project terminal:
+~~~powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
+.\.venv\Scripts\Activate.ps1
+~~~
 
-```powershell
-cd "C:\Users\Manya Kothari\Desktop\fog and edge computin\marine-edge-fog"
-..\.venv\Scripts\Activate.ps1
-python -m mqtt.edge_publisher
-```
+This changes policy only for the current PowerShell process.
 
-# Running Phase 4
+### No module named ...
 
-Phase 4 is still a software-only prototype. Fog converts every validated risk
-result into a traceable decision and stores the event, alert, decision, and any
-new sample request in one SQLite transaction before acknowledging Edge.
+~~~powershell
+python -m pip install -r requirements.txt
+Get-Command python
+~~~
 
-```text
-Sensor Event
-    ↓
-Risk
-    ↓
-Decision Engine
-    ↓
-MONITOR / RETEST / SENSOR_MAINTENANCE / COLLECT_SAMPLE
-    ↓
-Decision Database
-    ↓
-Sample ID if required
-    ↓
-MQTT Sampling Command
-    ↓
-Dashboard
-```
+### MQTT connection refused
 
-| Risk result | Decision | Sample request |
-|---|---|---|
-| LOW | `MONITOR` | No |
-| MEDIUM | `RETEST` | No |
-| HIGH | `COLLECT_SAMPLE` (harvest hold recommended) | Yes, subject to cooldown |
-| CRITICAL | `COLLECT_SAMPLE` | Yes, subject to cooldown |
-| INVALID | `SENSOR_MAINTENANCE` | No |
+- Confirm Mosquitto is running.
+- Confirm all processes use localhost:1883.
+- Do not start two brokers on port 1883.
+- Check Get-Service mosquitto.
 
-Repeated HIGH/CRITICAL readings do not create a new sample during the default
-15-minute cooldown. A LOW, MEDIUM, or INVALID reading resets the elevated-risk
-episode, so a later HIGH/CRITICAL transition can create a new request. Database
-uniqueness also prevents duplicate MQTT delivery from creating duplicate
-decisions or samples.
+### Repeated MQTT reconnects
 
-Open five PowerShell terminals in the project folder and activate the same
-environment in Terminals 2–5.
+Edge, Fog, and sampling client IDs must be different. Do not run two copies of the same component with the same client ID.
 
-## Terminal 1 — Mosquitto
+### No decisions
 
-If `netstat -ano | findstr :1883` does not show `LISTENING`:
+- Start Fog before Edge.
+- Wait for a new sequence; duplicates intentionally create no decision.
+- Run python -m storage.diagnostics.
+- Confirm Fog and dashboard use the same database.
 
-```powershell
-& "C:\Program Files\Mosquitto\mosquitto.exe" -v
-```
+### Empty dashboard
 
-## Terminal 2 — Fog decision receiver
+The dashboard does not generate readings. Start Mosquitto, Fog, and Edge, wait for an ACK, and refresh.
 
-```powershell
-cd "C:\Users\Manya Kothari\Desktop\fog and edge computin\marine-edge-fog"
-python -m mqtt.fog_receiver
-```
+### Port 5000 is busy
 
-## Terminal 3 — Edge publisher
+Stop the older dashboard with Ctrl+C or inspect it:
 
-```powershell
-cd "C:\Users\Manya Kothari\Desktop\fog and edge computin\marine-edge-fog"
-python -m mqtt.edge_publisher
-```
+~~~powershell
+Get-NetTCPConnection -LocalPort 5000
+~~~
 
-## Terminal 4 — Dashboard
+### Database locked during tests
 
-```powershell
-cd "C:\Users\Manya Kothari\Desktop\fog and edge computin\marine-edge-fog"
-python -m dashboard.app
-```
+Stop live Fog/dashboard processes and rerun the tests. Tests should not require the live broker.
 
-Open `http://127.0.0.1:5000`. The dashboard shows the latest decision,
-decision history, sampling requirement, sample ID, command status, and sample
-history in addition to all Phase 3 content.
+## Research novelty
 
-## Terminal 5 — Simulated sampling receiver
+The novelty is the integrated software architecture, not direct toxin identification:
 
-```powershell
-python -m mqtt.sampling_receiver
-```
+- validation-aware local Edge risk;
+- reliable MQTT delivery with ACK, offline queue, and replay;
+- duplicate-safe Fog persistence and immediate decisions;
+- traceable decision-to-virtual-sample records;
+- cooldown-aware sampling to avoid redundant actions;
+- transparent recommendations for monitoring, retesting, maintenance, or sampling;
+- one historical dashboard for operational review;
+- a reproducible software-only prototype without costly marine hardware.
 
-For HIGH/CRITICAL transitions, expected flow is:
+Planned novelty includes multi-zone digital twins, explainable AI, uncertainty-aware decisions, adaptive Edge/Fog/Cloud allocation, species-wise recommendations, and role-based views. These belong to pending phases.
 
-```text
-Edge event -> Fog atomic storage -> decision/sample IDs
-           -> marine/<zone>/commands -> simulated receiver
-           -> marine/<zone>/command-ack -> sample command status SIMULATED_ACK
-```
+A real deployment would additionally require calibrated instruments, validated toxin-specific models, secure communication, field trials, and accredited laboratory confirmation. This repository does not claim direct toxin detection, certified seafood safety, verified AI accuracy, or patent approval.
 
-This receiver only prints and acknowledges the command. It does not control a
-pump, collect seawater, detect toxins, or submit a laboratory sample. Sampling
-is simulated throughout Phase 4. HIGH/CRITICAL create verification sample
-requests only; they do not confirm toxin presence, and accredited laboratory
-confirmation is still required.
+## Safe shutdown and local data
 
-Manual Phase 4 verification completed with Mosquitto: a controlled HIGH event
-created linked decision/sample IDs, Fog published the command, the simulator
-returned `SIMULATED_ACK`, and the dashboard plus all three Phase 4 APIs returned
-the persisted result successfully.
+Stop long-running processes with Ctrl+C. Suggested order:
 
-Phase 4 read-only APIs:
+1. Edge Publisher
+2. Sampling Receiver
+3. Fog Receiver
+4. Dashboard
+5. Mosquitto, only if started manually
 
-```powershell
-$result = Invoke-RestMethod "http://127.0.0.1:5000/api/decision/latest"
-$result.decision | Format-List
+Do not delete the data directory if local history or queued events must be preserved. Runtime databases, queues, caches, environments, temporary files, and secrets are excluded by .gitignore and must not be committed.
 
-Invoke-RestMethod "http://127.0.0.1:5000/api/decisions"
-Invoke-RestMethod "http://127.0.0.1:5000/api/samples"
-```
+---
 
 Database diagnostics:
 
@@ -1150,3 +997,7 @@ This verifies software integration, not real collection, laboratory results,
 HAB detection accuracy or a live Mosquitto deployment. Laboratory status stays
 `NOT_SUBMITTED`. Production and backup records are untouched, and the 388
 legacy requests still require evidence-based reconciliation outside this demo.
+
+**Repository:** [9570-ux/fog-n-edge](https://github.com/9570-ux/fog-n-edge)
+**Completed scope:** Phases 1–5, software only
+**Next planned phase:** Phase 6 (Pending)
