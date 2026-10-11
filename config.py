@@ -125,3 +125,14 @@ SAMPLING_COMMAND_DURATION_SECONDS = int(
 SAMPLING_RECEIVER_MQTT_CLIENT_ID = os.getenv(
     "MARINE_SAMPLING_CLIENT_ID", "marine-sampling-simulator-01"
 )
+
+# Phase 5 virtual planning. Weights are relative and normalized by their sum.
+SAMPLING_PLAN_BUDGET = int(os.getenv("MARINE_PLAN_BUDGET", "2"))
+SAMPLING_PLAN_STALE_SECONDS = float(os.getenv("MARINE_PLAN_STALE_SECONDS", "900"))
+SAMPLING_PLAN_OVERDUE_SECONDS = float(os.getenv("MARINE_PLAN_OVERDUE_SECONDS", "3600"))
+SAMPLING_PLAN_WEIGHTS = {
+    "risk": float(os.getenv("MARINE_PLAN_WEIGHT_RISK", "0.5")),
+    "trend": float(os.getenv("MARINE_PLAN_WEIGHT_TREND", "0.15")),
+    "overdue": float(os.getenv("MARINE_PLAN_WEIGHT_OVERDUE", "0.2")),
+    "quality_proxy": float(os.getenv("MARINE_PLAN_WEIGHT_QUALITY", "0.15")),
+}

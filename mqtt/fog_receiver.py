@@ -15,7 +15,7 @@ from config import (
 )
 from database import MarineDatabase
 from decision import DecisionEngine, SamplingManager
-from decision.sampling_manager import parse_command_ack
+from decision.sampling_manager import parse_command_ack, parse_simulation_event
 from mqtt.message_utils import (
     DuplicateDetector, build_ack, parse_sensor_message, serialize_message, topic,
 )
@@ -49,7 +49,8 @@ class FogReceiver:
             client.subscribe(subscription, qos=MQTT_QOS)
             command_ack_subscription = topic("+", "command-ack")
             client.subscribe(command_ack_subscription, qos=MQTT_QOS)
-            LOG.info("Connected to MQTT broker. Subscribed to %s and %s",
+            client.subscribe(topic("+", "simulation-events"), qos=MQTT_QOS)
+            LOG.info("Connected to MQTT broker. Subscribed to %s and %s (plus simulation-events)",
                      subscription, command_ack_subscription)
         else:
             LOG.error("MQTT connection rejected: %s", reason_code)
@@ -68,8 +69,11 @@ class FogReceiver:
             LOG.info("Disconnected from MQTT broker.")
 
     def _on_message(self, client: mqtt.Client, userdata: Any, incoming: mqtt.MQTTMessage) -> None:
+        if str(getattr(incoming, "topic", "")).endswith("/simulation-events"):
+            self._handle_simulation_event(incoming.payload, str(incoming.topic))
+            return
         if str(getattr(incoming, "topic", "")).endswith("/command-ack"):
-            self._handle_command_ack(incoming.payload)
+            self._handle_command_ack(incoming.payload, str(incoming.topic))
             return
         try:
             message = parse_sensor_message(incoming.payload)
@@ -126,21 +130,41 @@ class FogReceiver:
         client.publish(topic(message["zone_id"], "ack"), serialize_message(acknowledgement),
                        qos=MQTT_QOS)
 
-    def _handle_command_ack(self, payload: bytes | str) -> None:
+    def _handle_command_ack(self, payload: bytes | str, incoming_topic: str) -> None:
         try:
             acknowledgement = parse_command_ack(payload)
         except ValueError as exc:
             LOG.warning("Invalid sampling command acknowledgement: %s", exc)
             return
-        updated = self.database.update_sample_command_ack(
-            acknowledgement["sample_id"], acknowledgement["status"]
-        )
+        try:
+            updated = self.database.update_sample_command_ack(
+                acknowledgement["sample_id"], acknowledgement["status"],
+                device_id=acknowledgement["device_id"],
+                acknowledgement_topic=incoming_topic,
+            )
+        except Exception:
+            LOG.exception("Sampling acknowledgement persistence failed")
+            return
         if updated:
             LOG.info("Simulated sampling command acknowledged for %s.",
                      acknowledgement["sample_id"])
         else:
-            LOG.warning("Command acknowledgement references unknown sample %s.",
+            LOG.warning("Sampling acknowledgement rejected: unknown sample, mismatched identity, or unsupported command state for %s.",
                         acknowledgement["sample_id"])
+
+    def _handle_simulation_event(self, payload: bytes | str, incoming_topic: str) -> None:
+        try:
+            event = parse_simulation_event(payload)
+            result = self.database.record_simulation_event(event, incoming_topic=incoming_topic)
+        except ValueError as exc:
+            LOG.warning("Simulation evidence rejected: %s", exc)
+            return
+        except Exception:
+            LOG.exception("Simulation evidence persistence failed")
+            return
+        LOG.info("Simulation evidence %s: event=%s sample=%s virtual_status=%s",
+                 "stored" if result["inserted"] else "duplicate", event["event_id"],
+                 event["sample_id"], result["sample"]["collection_status"])
 
     @staticmethod
     def _display(message: dict[str, Any]) -> None:

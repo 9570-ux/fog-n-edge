@@ -17,7 +17,7 @@ visualizes them locally.
 | Phase 2 — MQTT Edge-Fog Communication | ✅ Completed |
 | Phase 3 — Database & Dashboard | ✅ Completed |
 | Phase 4 — Decision & Automated Sampling Logic | ✅ Completed |
-| Phase 5 — ESP32 Hardware Integration | ⏳ Pending |
+| Phase 5 — Adaptive Virtual Sampling | **Completed (software-only)** |
 | Phase 6 — Pump & Alert Integration | ⏳ Pending |
 | Phase 7 — AI Model | ⏳ Pending |
 | Phase 8 — Final Integration & Testing | ⏳ Pending |
@@ -732,3 +732,421 @@ tracked project file.
 Limits and risk rules in `config.py` are prototype engineering assumptions.
 They require validation with local history and laboratory-confirmed data before
 operational or seafood-safety use.
+
+
+## Phase 5 — Adaptive, explainable virtual sampling
+
+**Completed (software-only).** Verified adaptive scoring, per-cycle budget limits,
+eligibility protection, persisted plans, idempotent retries, validated virtual
+lifecycle evidence, and isolated end-to-end simulation. Production planning
+remains blocked because 388 legacy sampling requests are unresolved. Live MQTT
+delivery, physical water collection, laboratory results, actual HAB detection,
+and production readiness are not verified by Phase 5 tests or the isolated demo.
+Phases 6, 7, and 8 remain Pending.
+
+The planner in `decision/adaptive_sampling.py` reads the same SQLite sensor
+observations, Fog decisions and Phase 4 samples as the existing application.
+It ranks zones, reserves up to a per-cycle budget, and persists explanations.
+Phase 4 automatic high-risk commands continue to operate independently; this
+budget limits Phase 5 plans, not Phase 4 commands or total system sampling.
+No new dependencies or hardware commands are introduced.
+
+### Scoring and eligibility
+
+Every zone with at least one stored event is considered. Unknown zones without
+observations cannot be discovered. Latest observations use event time in UTC,
+with event ID as a timestamp tie-breaker. Future or malformed timestamps are
+excluded from current risk and trend; a zone with no usable timestamps remains
+eligible for verification. Zones with active Phase 4 requests or virtual
+`PLANNED`/`IN_PROGRESS` reservations are excluded. No override is provided.
+Legacy samples remain active until explicitly terminal (`COMPLETED`, `CANCELLED`,
+or `FAILED`); `SIMULATED_ACK` alone never clears that protection.
+
+All components use 0–100:
+
+- **R (risk):** current validated Edge score, clamped to 0–100. Missing or
+  invalid risk contributes zero, with stored `risk_score: null` and level
+  `UNKNOWN`; this zero is a scoring convention, not an estimated low risk.
+- **T (trend):** positive change from the previous valid, distinct-time
+  observation from the same device, clamped to 0–100. Invalid observations
+  break the comparison. Insufficient history contributes zero.
+- **O (overdue):** `min(100, 100 * elapsed / overdue_seconds)` since the last
+  explicitly completed virtual sample. No timestamped completion contributes
+  100. Legacy request time and simulated ACK do not count as collection.
+- **Q (data-quality uncertainty proxy):** maximum of sensor-invalid/risk-missing
+  penalty (100), invalid/missing field fraction * 100, `100 * (1-validity_score)`,
+  and `min(100, 100 * observation_age / stale_seconds)`. Invalid timestamps
+  contribute 100. Numeric scores and validity are checked for finiteness.
+
+`priority = (wR*R + wT*T + wO*O + wQ*Q) / (wR+wT+wO+wQ)`.
+Default weights are 0.50, 0.15, 0.20, 0.15. Q is a data-quality proxy, **not a
+HAB probability, predictive confidence interval, or calibrated uncertainty**.
+The formula may trade high-risk coverage for verification of unreliable data.
+Stale risk remains a historical risk signal alongside an explicit stale-data
+reason; it is not a fresh measurement. Trend measures score change, not a
+rate or forecast. Weights are engineering choices, not fitted scientific values.
+
+Priority is rounded to six decimals; descending priority then ascending exact
+zone ID provides deterministic selection for the same inputs and planning time.
+Plan IDs are unique UUIDs, so reproducibility applies to selection and scores,
+not newly generated IDs. UTC timestamps include an offset. Legacy naive times
+are interpreted as UTC; actual legacy local timezone cannot be inferred.
+
+### Configuration
+
+Set environment variables before starting Python, or pass validated settings
+when constructing `AdaptiveSamplingPlanner`:
+
+| Environment variable | Default | Meaning |
+|---|---:|---|
+| `MARINE_PLAN_BUDGET` | 2 | Maximum zones per cycle; integer >= 0 |
+| `MARINE_PLAN_STALE_SECONDS` | 900 | Age at which Q's age component reaches 100 |
+| `MARINE_PLAN_OVERDUE_SECONDS` | 3600 | Completed-sample age at which O reaches 100 |
+| `MARINE_PLAN_WEIGHT_RISK` | 0.50 | R weight |
+| `MARINE_PLAN_WEIGHT_TREND` | 0.15 | T weight |
+| `MARINE_PLAN_WEIGHT_OVERDUE` | 0.20 | O weight |
+| `MARINE_PLAN_WEIGHT_QUALITY` | 0.15 | Q weight |
+
+Weights must be finite and nonnegative with a positive sum; intervals must be
+finite and positive. `MARINE_DATABASE_PATH` retains its existing semantics.
+Zero budget and no eligible zones both persist an empty plan. A larger budget
+selects only the available eligible zones.
+
+### Planner CLI
+
+Run from the repository directory with its activated environment. The commands
+also work with `.\.venv\Scripts\python.exe` in place of `python` on Windows.
+
+```powershell
+python -m decision.adaptive_sampling plan --budget 2 --request-id example-new-cycle
+python -m decision.adaptive_sampling inspect
+python -m decision.adaptive_sampling inspect --plan-id PLAN-<returned-uuid>
+python -m decision.adaptive_sampling status PLAN-<returned-uuid> zone-a IN_PROGRESS
+python -m decision.adaptive_sampling status PLAN-<returned-uuid> zone-a COMPLETED
+python -m decision.adaptive_sampling feedback PLAN-<returned-uuid>
+```
+
+To use a separate database, place the global option before the subcommand:
+`python -m decision.adaptive_sampling --database data/example.db plan --budget 1`.
+Invalid CLI values fail with an error and nonzero exit code. Use the same request
+ID to retry: it returns the stored plan and current statuses without reserving
+again. Reusing that ID with a different budget/settings/version fails. New
+request IDs create new cycles; active reservations still prevent duplication.
+
+Illustrative **synthetic** selected item (risk 60, no prior completion, fresh
+valid observation, no trend):
+
+```json
+{
+  "zone_id": "zone-a",
+  "risk_score": 60,
+  "risk_level": "HIGH",
+  "components": {"risk": 60, "trend": 0, "overdue": 100, "quality_proxy": 0},
+  "priority_score": 50,
+  "rank": 1,
+  "status": "PLANNED",
+  "sample_id": null,
+  "explanation": "High current environmental risk score. No timestamped completed virtual sample is recorded."
+}
+```
+
+Actual output also contains plan ID, UTC creation time, budget, algorithm
+version, settings, candidate snapshot, supporting evidence, Fog decision when
+available, and machine-readable reason codes. `inspect` shows pending and
+completed states. `status` explicitly starts/completes/cancels a **virtual**
+workflow; completion assigns a `VIRTUAL-` sample identifier and timestamp.
+It does not assert physical collection, laboratory verification or seafood
+safety. Terminal states cannot be reopened. Repeating the same transition is
+idempotent. Cancellation releases the reservation without a valid sample.
+
+### Database migration and MQTT boundary
+
+`MarineDatabase.initialize()` adds only `sampling_plans` and
+`sampling_plan_zones`, plus a partial unique index on active virtual zone
+reservations. Existing tables/records are preserved; no data reset or historical
+backfill occurs. Plan headers store request identity and reproducibility settings;
+zone rows store frozen recommendations, rank, lifecycle, and optional virtual
+sample ID/completion time. `BEGIN IMMEDIATE` serializes concurrent plan writers.
+The original `samples` table requires a unique Phase 4 decision/event, so virtual
+plan lifecycle is stored separately rather than manufacturing a Phase 4 decision.
+
+Existing `marine/<zone>/commands`, command format, sampling receiver and
+`SIMULATED_ACK` behavior remain unchanged and covered by regression tests.
+Phase 5 planning does not publish MQTT commands: a recommendation alone is
+not a collection request. The local CLI provides the explicit virtual execution
+boundary. Phase 4 activity can arise after a plan; its independent cooldown rules
+are preserved. A combined global budget or arbitration across both phases would
+require a separately validated change to the Phase 4 workflow.
+
+Feedback returns the first stored observation after plan creation per selected
+zone and the observed score change when both risk scores are available. No lab outcome fields or labelled HAB dataset currently exist, so
+`laboratory_outcome` is null. This interface supports later evaluation without
+inventing labels or implementing automatic retraining. Historical completed
+physical samples without a collection timestamp cannot inform elapsed time.
+
+### Tests, diagnostics, and research evaluation
+
+```powershell
+python -m pytest -q
+python -m database.diagnostics
+python -m decision.sampling_evaluation --seed 42 --budget 2 --cycles 12 --output data/phase5_evaluation.json
+```
+
+If the Windows system pytest temporary folder is inaccessible, use a **new**
+workspace directory: `python -m pytest -q --basetemp=data/phase5-test-run-unique`.
+Pytest owns that temporary directory; never point `--basetemp` at `data` itself
+or any directory containing records you need. Phase 5 tests use isolated
+fixtures; the production database is never used as a test fixture.
+Diagnostics includes virtual plan/status counts and SQLite integrity checks.
+
+The evaluation uses eight seeded synthetic zones, twelve cycles ten minutes
+apart, separate temporary databases per policy, and the same budget per cycle.
+It compares rotating round-robin, risk-only (score then zone ID), and adaptive
+ranking. Each policy records explicit synthetic completion history. Cycles
+alternate complete, missing and stale observations. Output reports observed
+high-risk coverage, number selected, utilization, consecutive-cycle repeats,
+pending-zone redundancy, degraded-zone selection/coverage and measured latency.
+Undefined coverage is null. Repeats can be justified by persistent risk; they
+are not automatically waste. This simulation completes samples immediately,
+so pending redundancy is zero by construction; pending safety is tested separately.
+Latency includes common candidate scoring/SQLite reads and ranking, excludes
+persistence/completion, and is not a production throughput benchmark.
+
+Measured seed-42 run (budget 2, 12 cycles):
+
+| Policy | Observed high-risk coverage | Selected | Budget utilization | Consecutive repeats |
+|---|---:|---:|---:|---:|
+| Round-robin | 28.6% | 24 | 100% | 0 |
+| Risk-only | 67.9% | 24 | 100% | 5 |
+| Adaptive | 67.9% | 24 | 100% | 2 |
+
+All policies made zero pending-zone redundant selections in this simulation.
+Mean measured selection latency was approximately 6–7 ms on this run; timings
+vary by machine. Across the four missing-data cycles, round-robin selected three
+degraded zones and both risk-based policies selected zero. Across four stale-data
+cycles, the corresponding counts were three, two and three. Quality weighting
+therefore does not guarantee selection of missing-data zones under a small budget.
+These are reproducible synthetic policy metrics, **not real HAB detection
+performance or evidence of scientific superiority**. Change seeds, weights and
+budgets to investigate sensitivity before drawing broader conclusions.
+
+Current verification: 151 tests passed (148 existing cases plus three isolated
+end-to-end regression cases). Full-history scoring currently loads stored records into
+memory; a large deployment would need bounded/indexed history queries and
+validated retention rules. No laboratory confirmation, learned uncertainty,
+automatic retraining, external devices or physical sample collection is added.
+
+### Troubleshooting: blocked zone with no candidates
+
+An empty plan is expected when every observed zone has an outstanding sample.
+The inspected production database contained only `zone-b` (6,708 observations)
+and 388 Phase 4 samples for that zone, all `REQUESTED` with `command_status`
+`PUBLISHED`, collection `SIMULATED`, and laboratory `NOT_SUBMITTED`. The planner
+checks sample **status**, not command acknowledgement or cooldown age. MQTT
+acknowledgements update `command_status` only, so old requests still block the
+zone. No physical completion or lab outcome can be inferred from them.
+
+Additionally, `cycle-001` is an idempotency key: its stored empty snapshot is
+returned on retries. A new request ID recomputes eligibility, but cannot make
+an outstanding zone eligible. No eligibility rule or historical request needs
+to be changed to test the planner.
+
+Run the safe selection demonstration from the repository:
+
+```powershell
+.\.venv\Scripts\python.exe -m decision.sampling_demo
+```
+
+This opens only a disposable temporary database populated with explicitly
+synthetic events through the existing simulator, validator, risk engine and
+Fog decision transaction. Synthetic `zone-b` has a pending Phase 4 request;
+synthetic `zone-a` (medium risk) and `zone-c` (low risk) are eligible. Budget 2
+selects both, in priority order. Output includes `SYNTHETIC_TEST_FIXTURE`,
+`blocked_zones: ["zone-b"]`, two candidates, two selected zones and
+`inspection_matches: true`. Selected items stay `PLANNED` with no sample ID or
+completion timestamp. The database is discarded when the demo finishes; it is
+not available to a later `inspect` command. No production database is opened,
+MQTT command is published, collection is asserted, or laboratory result is
+created. The regression suite also checks that Phase 4 transport statuses do
+not close requests, blocking is zone-specific, and retries of an empty plan
+remain stable after new eligible observations arrive.
+
+
+### ACK identity and read-only integration diagnostics
+
+Phase 4 command states advance monotonically:
+`PENDING -> PUBLISHED -> SIMULATED_ACK`. An ACK may arrive before the local
+publication update; a later `PUBLISHED` write cannot overwrite it. Repeated
+valid ACKs are accepted without rewriting the row. These transport states do
+not change sample `status`, `collection_status`, or `laboratory_status`.
+`PUBLISHED` means Paho accepted the publish operation, not that the sampling
+receiver acknowledged it. `SIMULATED_ACK` confirms only the software response.
+
+The existing MQTT ACK schema remains unchanged. Sample ID uniquely identifies
+its command; Fog additionally checks the ACK device ID and incoming
+`marine/<zone>/command-ack` topic against the stored sample. Unknown samples,
+mismatched devices/topics, unsupported states, empty or non-string identity
+fields, and malformed or timezone-less timestamps are rejected. Persistence
+failures are logged as failures. The two-argument
+`update_sample_command_ack(sample_id, status)` API remains available to trusted
+local callers; MQTT handling supplies both device and topic identity.
+No new tables or migrations are required for these changes.
+
+```powershell
+python -m database.diagnostics
+python -m database.diagnostics --json
+python -m database.diagnostics --database data/example.db --json
+```
+
+Diagnostics now opens SQLite with `mode=ro` and `query_only`, and never
+initializes a database or migrates its schema. Missing databases fail without
+creating files; databases without Phase 5 tables are reported without adding
+them. The report includes sample-status groups, command-status counts,
+outstanding requests, per-zone Phase 4 and virtual blockers, currently eligible
+zones, and stored plan candidate/selection counts. It distinguishes a zero-budget
+selection from an empty candidate snapshot and explains why plan headers with
+no zone rows have empty virtual statuses. Current eligibility is evaluated
+separately from the frozen snapshot returned for an existing request ID.
+
+These improvements do not close or backfill the 388 existing requests. ACKs
+remain transport acknowledgements, and planner eligibility is unchanged.
+Isolated integration tests cover duplicates, ACK/publication ordering, concurrent
+updates, invalid identities, lifecycle preservation, and diagnostics that leave
+database bytes unchanged. They do not use production records or a real broker.
+
+
+### Evidenced simulated-request lifecycle
+
+New Phase 4 requests now explicitly set `collection_status=SIMULATED_PENDING`.
+The original schema default `SIMULATED` is retained for backward compatibility;
+existing rows are not rewritten. Legacy `SIMULATED` means **virtual mode with
+completion unknown**, not completed collection. The new lifecycle API refuses
+start events for those legacy rows, preventing retrospective completion or
+backfill of the 388 historical requests.
+
+| Dimension | States | Evidence |
+|---|---|---|
+| Command transport | PENDING, PUBLISHED, SIMULATED_ACK | Publication/receiver ACK only |
+| Virtual collection | SIMULATED_PENDING, SIMULATED_IN_PROGRESS, SIMULATED_COMPLETED | Separate validated simulation events |
+| Request | REQUESTED, then COMPLETED | COMPLETED means the virtual task finished |
+| Laboratory | NOT_SUBMITTED | Simulation never submits specimens or creates lab results |
+
+A new additive `simulation_events` table stores unique event IDs, sample/device/
+zone identity, simulator run ID, event type, UTC start/completion times, an
+explicit `is_simulation=true` marker, local recording time, and canonical JSON.
+There is one start and one completion per sample. This table is created by the
+normal `MarineDatabase.initialize()` path; its migration contains no updates or
+backfill. During implementation it was applied **only to disposable test
+DBs**, not `data/marine_monitoring.db`. Starting a database-backed application
+later would initialize the new table; no such production startup was performed
+for this verification.
+
+`record_simulation_event()` is the only new lifecycle transition API. It validates
+identity, simulation marker, timezone-aware timestamps, request/start ordering,
+and non-future evidence. Completion must match a recorded start's run ID and
+start time. Valid events atomically persist evidence and advance collection
+state. On completion the request becomes `COMPLETED` and collection becomes
+`SIMULATED_COMPLETED`; command and laboratory states are unchanged. Identical
+canonical evidence with the same event ID is an idempotent no-op, including a
+start retried after completion. Reused IDs with different evidence, a different
+ID for an already recorded stage, mismatched identities/runs, missing start,
+or incompatible lifecycle states are rejected without partial writes.
+
+The separate MQTT channel is `marine/<zone>/simulation-events`. Existing command
+and ACK topics and required schema fields remain unchanged. New commands include
+an optional `simulation_lifecycle=true` flag; legacy commands without it are
+ACK-only. For opt-in commands, the sampling receiver emits a start event and
+runs a timed, interruptible **software task** using `duration_seconds`. Only
+when that task finishes does it emit a separate completion event. A shutdown
+interrupts the task without asserting completion. Fog validates incoming topic
+identity and records events through the database API; the handler publishes no
+collection commands. Command ACKs never invoke completion logic.
+
+Duplicate commands in the same receiver process reuse the original run/event
+IDs and replay cached evidence without starting another task. Receiver caching
+is in memory: a restart cannot resume an interrupted run or recreate its original
+evidence IDs. Conflicting replacement evidence is rejected by Fog. There is
+no durable receiver outbox, simulation-event application ACK, or automatic
+recovery for lost/out-of-order evidence; QoS 1 alone is not a completion guarantee.
+Those features would require a separately tested extension. Timestamp validation
+assumes synchronized clocks. These events establish virtual execution only,
+not physical collection, specimen quality, or independently attested measurements.
+
+Phase 5 eligibility and terminal statuses are unchanged. An evidenced completed
+request ceases to block its zone, but another outstanding Phase 4 request or
+active virtual reservation still blocks it. The planner's existing completed-
+sample age calculation does not yet consume Phase 4 simulation-event timestamps;
+releasing a request therefore does not imply a new physical or laboratory sample
+nor automatically reset that scoring component.
+
+Read-only diagnostics reports collection-state counts, the number of legacy
+unknown-completion rows, recorded evidence counts, and evidenced virtual
+completions. It reports an absent evidence table without creating it. The
+production database therefore continues to show 388 legacy unknown requests
+until a separately authorized historical-resolution policy exists.
+
+The disposable integration tests demonstrate blocking before completion,
+ACK/time/new readings not resolving requests, valid completion, another request
+keeping the zone blocked, duplicates, identity/run contradictions, missing
+start, invalid timestamps/markers, atomic rollback, unchanged legacy rows during
+migration, fake-client receiver behavior, shutdown interruption, and a fresh
+Phase 5 plan. No real broker or production DB writes are used.
+
+```powershell
+python -m pytest -q
+python -m database.diagnostics --json
+```
+
+Reusing `cycle-001` continues to return the stored empty snapshot. After valid
+resolution **in a temporary fixture**, create a fresh plan with a new request ID:
+
+```powershell
+python -m decision.adaptive_sampling --database data/lifecycle_test.db plan --budget 2 --request-id lifecycle-test-002
+```
+
+The file must already contain the synthetic fixture; creating a new empty DB
+alone gives no observed zones. A new request ID does not bypass legacy blocks.
+No requests or virtual samples are marked physically collected by this workflow.
+
+
+### Isolated Phase 5 end-to-end verification
+
+Run from `fog-n-edge`:
+
+```powershell
+.\.venv\Scripts\python.exe -m decision.sampling_demo --end-to-end
+.\.venv\Scripts\python.exe -m pytest -q tests/test_phase5_end_to_end.py --basetemp=.pytest-e2e-tmp
+.\.venv\Scripts\python.exe -m pytest -q --basetemp=.pytest-tmp
+```
+
+The default demo above verifies selection only. The `--end-to-end` mode also
+executes two local virtual timer tasks through `IN_PROGRESS` to `COMPLETED`,
+inspects their persisted virtual IDs and timestamps, and creates a fresh plan.
+It additionally routes JSON commands, ACKs and simulation events through the
+actual Fog and sampling receiver callbacks using an in-process queue. There is
+no external broker connection. The Phase 5 local task lifecycle and Phase 4
+MQTT sample lifecycle have separate identities and tables; this harness tests
+both without pretending a virtual plan ID is a Phase 4 command identity.
+
+A new synthetic Phase 4 request stays outstanding after ACK. Its recorded
+simulation start and completion events have unique event IDs and matching
+sample/device/zone/run identities. Only validated completion releases that
+zone. An explicitly labelled legacy fixture remains unchanged and blocked.
+The stored empty `synthetic-e2e-empty` plan stays empty on retry; a different
+request ID produces the fresh eligible plan. The production `cycle-001`
+snapshot is never opened or reused. Fresh production planning requires a new
+request ID and legitimate reconciliation of outstanding requests; changing
+only the ID does not unblock `zone-b`.
+
+Output is JSON labelled `SYNTHETIC_END_TO_END_SIMULATION`, with `result: PASS`,
+individual checks, persisted evidence, lifecycle snapshots and limitations.
+Failure raises an error instead of reporting success. The temporary database
+is removed on success or failure. The runner accepts no database path and
+ignores the configured production database. Seeded selection is reproducible;
+UUIDs, timestamps and measured timer durations vary. The next plan is left
+`PLANNED` as a distinct future cycle in the disposable database.
+
+This verifies software integration, not real collection, laboratory results,
+HAB detection accuracy or a live Mosquitto deployment. Laboratory status stays
+`NOT_SUBMITTED`. Production and backup records are untouched, and the 388
+legacy requests still require evidence-based reconciliation outside this demo.
